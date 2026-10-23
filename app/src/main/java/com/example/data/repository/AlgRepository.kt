@@ -3,6 +3,7 @@ package com.example.data.repository
 import android.content.Context
 import android.net.Uri
 import com.example.data.local.ActivityMetricsEntity
+import com.example.data.local.ChallengeStandingEntity
 import com.example.data.local.AlgDao
 import com.example.data.local.GaumeInitialSeedData
 import com.example.data.local.MyChronoDirectoryEntry
@@ -12,6 +13,7 @@ import com.example.data.local.RaceResultEntity
 import com.example.data.local.RaceTerrainWeatherEntity
 import com.example.data.local.RunnerProfileEntity
 import com.example.data.remote.MyChronoApiClient
+import com.example.domain.ChallengeStandingsCalculator
 import com.example.domain.GpxAndTrackUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -29,6 +31,7 @@ class AlgRepository(
     val allActivityMetricsFlow: Flow<List<ActivityMetricsEntity>> = algDao.observeAllActivityMetrics()
     val allTerrainWeatherFlow: Flow<List<RaceTerrainWeatherEntity>> = algDao.observeAllTerrainWeather()
     val directoryFlow: Flow<List<MyChronoDirectoryEntry>> = algDao.observeDirectory()
+    val standingsFlow: Flow<List<ChallengeStandingEntity>> = algDao.observeAllStandings()
 
     /**
      * Saisons disponibles à partir de 2026 (2026, 2027, et toute année >= 2027). Jamais 2025.
@@ -40,46 +43,15 @@ class AlgRepository(
     }
 
     /**
-     * Initialise les 3 profils du Trio (Damien, Laetitia, Élodie),
-     * charge le calendrier des villages de Gaume 2026/2027 (avec ZÉRO résultat fictif),
-     * et purge tout résultat sur une distance sans numéro de dossard attribué.
+     * Crée les 3 profils du Trio au premier lancement et purge tout résultat sur une distance sans dossard.
+     * Aucun calendrier n'est inventé : les manches viennent uniquement de MyChrono.
      */
     suspend fun ensureSeeded() = withContext(Dispatchers.IO) {
         algDao.deletePre2026Races()
         algDao.deletePre2026Results()
 
-        val currentProfiles = algDao.getRunnerProfilesSnapshot()
-        if (currentProfiles.isEmpty()) {
+        if (algDao.getRunnerProfilesSnapshot().isEmpty()) {
             algDao.upsertRunnerProfiles(GaumeInitialSeedData.buildInitialProfiles())
-            algDao.upsertDirectoryEntries(GaumeInitialSeedData.buildDirectoryEntries())
-        } else {
-            // S'assure que Damien a bien son dossard 10 km (#697) et que Laetitia/Élodie n'ont pas un dossard 5 km copié sur le 10 km
-            for (p in currentProfiles) {
-                if (p.profileId == "me" && p.defaultBib10km.isBlank()) {
-                    algDao.upsertRunnerProfile(
-                        p.copy(
-                            myChronoRunnerId = p.myChronoRunnerId.ifBlank { "1171" },
-                            defaultBib10km = "697"
-                        )
-                    )
-                } else if ((p.profileId == "laetitia" || p.profileId == "elodie") &&
-                    (p.defaultBib10km == p.defaultBib5km || p.defaultBib10km in listOf("1127", "1231", "697"))
-                ) {
-                    algDao.upsertRunnerProfile(
-                        p.copy(
-                            defaultBib10km = "",
-                            preferredDistanceKm = 5
-                        )
-                    )
-                }
-            }
-        }
-
-        // Charge le calendrier des manches/villages de Gaume pour 2026 et 2027 si absent (0 résultat fictif)
-        for (year in listOf(2026, 2027)) {
-            if (algDao.getRacesBySeasonSnapshot(year).isEmpty()) {
-                algDao.upsertRaces(GaumeInitialSeedData.buildOfficialGaumeSeasonCalendar(year))
-            }
         }
 
         purgeResultsWithoutAssignedBib()
@@ -114,25 +86,17 @@ class AlgRepository(
     }
 
     /**
-     * Synchronise les saisons à partir de 2026 depuis l'API publique MyChrono
-     * en séparant strictement les résultats du 10 km et du 5 km et en ignorant toute distance sans dossard.
+     * Synchronise une saison depuis l'API publique MyChrono : calendrier, résultats du Trio
+     * (10 km et 5 km strictement séparés) et classement provisoire de tous les coureurs.
+     * Si MyChrono ne publie rien, les données locales sont laissées telles quelles.
      */
     suspend fun syncSeasonFromMyChrono(seasonYear: Int): Result<String> = withContext(Dispatchers.IO) {
         val targetYear = maxOf(2026, seasonYear)
         val profiles = algDao.getRunnerProfilesSnapshot()
-        val existingRaces = algDao.getRacesBySeasonSnapshot(targetYear).ifEmpty {
-            val seeded = GaumeInitialSeedData.buildOfficialGaumeSeasonCalendar(targetYear)
-            algDao.upsertRaces(seeded)
-            seeded
-        }
 
         purgeResultsWithoutAssignedBib()
 
-        myChronoApiClient.fetchSeasonFromMyChrono(
-            seasonYear = targetYear,
-            existingRaces = existingRaces,
-            profiles = profiles
-        ).map { payload ->
+        myChronoApiClient.fetchSeasonFromMyChrono(targetYear).map { payload ->
             if (payload.updatedRaces.isNotEmpty()) {
                 algDao.deleteRacesBySeason(targetYear)
                 algDao.upsertRaces(payload.updatedRaces)
@@ -147,17 +111,15 @@ class AlgRepository(
                     .associateBy { it.raceId }
 
                 for (race in payload.updatedRaces) {
-                    val overrideForRace = overrides[race.raceId]
-                    val matchesForRace = myChronoApiClient.findMatchingResultsForProfile(
-                        raceId = race.raceId,
-                        seasonYear = targetYear,
-                        profile = profile,
-                        raceOverride = overrideForRace,
-                        rawRows = payload.rawRowsByRaceId[race.raceId].orEmpty()
+                    allMatchedResults.addAll(
+                        myChronoApiClient.findMatchingResultsForProfile(
+                            raceId = race.raceId,
+                            seasonYear = targetYear,
+                            profile = profile,
+                            raceOverride = overrides[race.raceId],
+                            rawRows = payload.rawRowsByRaceId[race.raceId].orEmpty()
+                        )
                     )
-                    if (matchesForRace.isNotEmpty()) {
-                        allMatchedResults.addAll(matchesForRace)
-                    }
                 }
             }
 
@@ -166,8 +128,15 @@ class AlgRepository(
                 if (allMatchedResults.isNotEmpty()) {
                     algDao.upsertRaceResults(allMatchedResults)
                 }
-            } else if (allMatchedResults.isNotEmpty()) {
-                algDao.upsertRaceResults(allMatchedResults)
+                val now = System.currentTimeMillis()
+                algDao.deleteStandingsBySeason(targetYear)
+                algDao.upsertStandings(
+                    ChallengeStandingsCalculator.computeSeasonStandings(
+                        seasonYear = targetYear,
+                        rawRowsByRaceId = payload.rawRowsByRaceId,
+                        computedAtEpochMillis = now
+                    )
+                )
             }
 
             purgeResultsWithoutAssignedBib()
@@ -179,7 +148,11 @@ class AlgRepository(
 
             val count10k = allMatchedResults.count { it.distanceLabel == "10 km" }
             val count5k = allMatchedResults.count { it.distanceLabel == "5 km" }
-            "${payload.message} ($count10k rés. 10 km • $count5k rés. 5 km)"
+            if (payload.updatedRaces.isEmpty()) {
+                payload.message
+            } else {
+                "${payload.message} ($count10k rés. 10 km • $count5k rés. 5 km)"
+            }
         }
     }
 
@@ -260,7 +233,7 @@ class AlgRepository(
         val profile = algDao.getRunnerProfile(profileId)
             ?: return@withContext Result.failure(IllegalStateException("Profil introuvable"))
 
-        myChronoApiClient.fetchRaceRawResults(race.myChronoEventId, race.seasonYear).fold(
+        myChronoApiClient.fetchRaceRawResults(race.myChronoEventId).fold(
             onSuccess = { rows ->
                 val matchedList = myChronoApiClient.findMatchingResultsForProfile(
                     raceId = race.raceId,
@@ -302,7 +275,7 @@ class AlgRepository(
         terrainCondition: String,
         isPlannedForSimulator: Boolean,
         plannedDistanceKm: Int,
-        simulatedTargetPoints: Int,
+        simulatedTargetPoints: Int?,
         runnerNotes: String
     ) = withContext(Dispatchers.IO) {
         val entity = RaceTerrainWeatherEntity(
@@ -313,7 +286,7 @@ class AlgRepository(
             terrainCondition = terrainCondition.ifBlank { "Sec" },
             isPlannedForSimulator = isPlannedForSimulator,
             plannedDistanceKm = if (plannedDistanceKm == 5) 5 else 10,
-            simulatedTargetPoints = simulatedTargetPoints.coerceIn(100, 1000),
+            simulatedTargetPoints = simulatedTargetPoints?.coerceIn(0, 1200),
             terrainNotes = runnerNotes.trim()
         )
         algDao.upsertTerrainWeather(entity)
@@ -335,11 +308,11 @@ class AlgRepository(
             raceId = raceId,
             profileId = profileId,
             weatherCondition = existing?.weatherCondition ?: "Nuageux",
-            temperatureC = existing?.temperatureC ?: 14,
+            temperatureC = existing?.temperatureC,
             terrainCondition = existing?.terrainCondition ?: "Sec",
             isPlannedForSimulator = isPlanned,
             plannedDistanceKm = if (distanceKm == 5) 5 else 10,
-            simulatedTargetPoints = existing?.simulatedTargetPoints ?: defaultTargetPoints.coerceIn(100, 1000),
+            simulatedTargetPoints = existing?.simulatedTargetPoints ?: defaultTargetPoints.coerceIn(0, 1200),
             terrainNotes = existing?.terrainNotes ?: ""
         )
         algDao.upsertTerrainWeather(updated)
@@ -371,7 +344,7 @@ class AlgRepository(
                 elevationGainMeters = parsed.elevationGainMeters,
                 avgHeartRateBpm = parsed.avgHeartRateBpm,
                 maxHeartRateBpm = parsed.maxHeartRateBpm,
-                cadenceSpm = 174,
+                cadenceSpm = null,
                 serializedTrackPoints = parsed.serializedCoordinates
             )
             algDao.upsertSingleActivityMetric(entity)

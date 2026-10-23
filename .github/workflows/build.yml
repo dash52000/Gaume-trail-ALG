@@ -1,8 +1,9 @@
 name: Build APK
 
+# Chaque push compile l'appli et lance les tests.
+# Seul un push sur main publie l'APK dans les Releases.
 on:
   push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -21,12 +22,13 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      - name: Compiler l'APK
+      - name: Compiler l'APK et lancer les tests
         run: |
+          set -o pipefail
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon --stacktrace 2>&1 | tee build.log
+          ./gradlew assembleDebug testDebugUnitTest --no-daemon --stacktrace 2>&1 | tee build.log
 
-      # En cas d'échec, remonte les erreurs comme annotations lisibles sur le commit.
+      # En cas d'échec, remonte les erreurs (compilation et tests) comme annotations lisibles sur le commit.
       - name: Résumer les erreurs
         if: failure()
         run: |
@@ -35,10 +37,31 @@ jobs:
           grep -E '^e: ' build.log | head -15 | while IFS= read -r line; do
             echo "::error title=Kotlin::$(printf '%s' "$line" | esc)"
           done
+          for f in app/build/test-results/testDebugUnitTest/*.xml; do
+            [ -f "$f" ] || continue
+            python3 - "$f" <<'EOF'
+          import sys, xml.etree.ElementTree as ET
+          for tc in ET.parse(sys.argv[1]).getroot().iter('testcase'):
+              for fl in tc.findall('failure') + tc.findall('error'):
+                  msg = (fl.get('message') or fl.text or '').replace('%', '%25').replace('\n', '%0A')[:600]
+                  print(f"::error title=Test {tc.get('classname')}.{tc.get('name')}::{msg}")
+          EOF
+          done
           wrong=$(awk '/What went wrong/{f=1} f{print} /^\* Try:/{if(f) exit}' build.log | head -60 | esc)
           if [ -n "$wrong" ]; then echo "::error title=Gradle::$wrong"; fi
           tail -n 40 build.log | esc | { read -r t; echo "::warning title=Fin du log::$t"; }
           exit 0
+
+      - name: Garder les rapports de tests
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rapports-tests
+          path: |
+            app/build/reports/tests
+            app/build/test-results
+            build.log
+          if-no-files-found: ignore
 
       # Garde le schéma de la base dans le repo pour pouvoir migrer sans perte plus tard.
       - name: Sauver le schéma de la base
@@ -48,13 +71,15 @@ jobs:
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add app/schemas
             git commit -m "Schéma de la base exporté par le build"
-            git push
+            git push origin "HEAD:${GITHUB_REF_NAME}"
           fi
 
       - name: Préparer l'APK
+        if: github.ref == 'refs/heads/main'
         run: cp app/build/outputs/apk/debug/app-debug.apk gaume-trail-alg.apk
 
       - name: Publier la Release
+        if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v1.0.${{ github.run_number }}

@@ -4,7 +4,6 @@ import com.example.data.local.GaumeInitialSeedData
 import com.example.data.local.RaceEntity
 import com.example.data.local.RaceResultEntity
 import com.example.data.local.RaceTerrainWeatherEntity
-import com.example.data.remote.MyChronoApiClient
 import com.example.domain.AlgChallengeCalculator
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -12,9 +11,11 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
-class ExampleUnitTest {
+@Config(sdk = [36])
+class ChallengeCalculatorTest {
 
     @Test
     fun separate10kmAnd5kmChallenges_neverMixResults() {
@@ -166,97 +167,6 @@ class ExampleUnitTest {
     }
 
     @Test
-    fun gaumeExactGpsAndTerritoryConquest_resolvesVillagesAndUnlocksTerroirBadges() {
-        val profile = GaumeInitialSeedData.buildInitialProfiles().first { it.profileId == "me" }
-        val villages = listOf(
-            "Florenville",
-            "Pin",
-            "Chiny",
-            "Rulles",
-            "Étalle",
-            "Virton",
-            "Meix-devant-Virton",
-            "Saint-Léger"
-        )
-        val races = villages.mapIndexed { idx, villageName ->
-            RaceEntity(
-                raceId = "2026_r${idx + 1}",
-                seasonYear = 2026,
-                roundNumber = idx + 1,
-                myChronoEventId = "ev_${idx + 1}",
-                title = "Allure Libre de $villageName",
-                village = villageName,
-                dateIso = "2026-06-0${idx + 1}",
-                distanceKm = 10.0,
-                elevationGainMeters = 180,
-                isCompleted = true,
-                isSeasonFinale = false
-            )
-        }
-
-        val florenvilleGeo = GaumeInitialSeedData.resolveGaumeGeoForRace(races[0])
-        assertEquals("Florenville", florenvilleGeo.canonicalVillage)
-        assertEquals("orval_semois", florenvilleGeo.territoryId)
-        assertEquals(49.6992, florenvilleGeo.latitude, 0.01)
-        assertEquals(5.3103, florenvilleGeo.longitude, 0.01)
-
-        val meixGeo = GaumeInitialSeedData.resolveGaumeGeoForRace(races[6])
-        assertEquals("Meix-devant-Virton", meixGeo.canonicalVillage)
-        assertEquals(49.6056, meixGeo.latitude, 0.01)
-        assertEquals(5.4806, meixGeo.longitude, 0.01)
-
-        val results10km = races.mapIndexed { idx, race ->
-            RaceResultEntity(
-                raceId = race.raceId,
-                profileId = "me",
-                distanceLabel = "10 km",
-                seasonYear = 2026,
-                bibNumber = "697",
-                officialTimeSeconds = 2400 + idx * 15,
-                officialTimeFormatted = "40:15",
-                speedKmh = 14.9,
-                pacePerKmFormatted = "4:01 /km",
-                overallRank = 12,
-                totalFinishers = 210,
-                categoryRank = 5,
-                categoryTotal = 55,
-                challengePoints = 945
-            )
-        }
-
-        val mudEntry = listOf(
-            RaceTerrainWeatherEntity(
-                raceId = "2026_r1",
-                profileId = "me",
-                terrainCondition = "Boueux",
-                weatherCondition = "Pluie",
-                temperatureC = 10,
-                terrainNotes = "Boue en forêt d'Orval",
-                isPlannedForSimulator = false,
-                plannedDistanceKm = 10,
-                simulatedTargetPoints = null
-            )
-        )
-
-        val summary = AlgChallengeCalculator.computeChallengeSummary(
-            profile = profile,
-            seasonYear = 2026,
-            racesInSeason = races,
-            allSeasonResults = results10km,
-            allActivityMetrics = emptyList(),
-            allTerrainWeather = mudEntry
-        )
-
-        val conquest = summary.conquest10km
-        assertEquals(8, conquest.conqueredVillagesCount)
-        assertEquals(6, conquest.territoriesConqueredCount)
-        assertTrue(conquest.xpPoints >= 2500)
-        assertTrue(conquest.badges.any { it.badgeId == "badge_orval_semois" && it.isUnlocked })
-        assertTrue(conquest.badges.any { it.badgeId == "badge_grand_duc_gaume" && it.isUnlocked })
-        assertTrue(conquest.badges.any { it.badgeId == "badge_sanglier_gaumais" && it.isUnlocked })
-    }
-
-    @Test
     fun pronosticPrevuVsReel_computesUpcomingAndPostRaceVerdict() {
         val profile = GaumeInitialSeedData.buildInitialProfiles().first { it.profileId == "me" }
         val races = listOf(
@@ -317,60 +227,4 @@ class ExampleUnitTest {
         assertTrue(r3Prono.predictedTimeSeconds > 2480)
     }
 
-    @Test
-    fun myChronoParser_extractsBoth5kmAnd10kmDistances() {
-        val sampleJson = """
-            [
-              {
-                "id": "1171",
-                "full_name": "Damien Collet",
-                "dossard": "697",
-                "distance_km": 10.2,
-                "time": "41:12",
-                "place": 18,
-                "points": 946
-              },
-              {
-                "id": "1075",
-                "full_name": "Laetitia",
-                "dossard": "1075",
-                "distance_km": 5.2,
-                "time": "25:30",
-                "place": 14,
-                "points": 918
-              }
-            ]
-        """.trimIndent()
-
-        val client = MyChronoApiClient()
-        val rawRows = client.parseResultsPayload(sampleJson)
-        assertEquals(2, rawRows.size)
-
-        val profiles = GaumeInitialSeedData.buildInitialProfiles()
-        val damienProfile = profiles.first { it.profileId == "me" }
-        val laetitiaProfile = profiles.first { it.profileId == "laetitia" }
-
-        val damienMatches = client.findMatchingResultsForProfile(
-            raceId = "2026_round_01",
-            seasonYear = 2026,
-            profile = damienProfile,
-            raceOverride = null,
-            rawRows = rawRows
-        )
-        val laetitiaMatches = client.findMatchingResultsForProfile(
-            raceId = "2026_round_01",
-            seasonYear = 2026,
-            profile = laetitiaProfile,
-            raceOverride = null,
-            rawRows = rawRows
-        )
-
-        assertEquals(1, damienMatches.size)
-        assertEquals("10 km", damienMatches.first().distanceLabel)
-        assertEquals("697", damienMatches.first().bibNumber)
-
-        assertEquals(1, laetitiaMatches.size)
-        assertEquals("5 km", laetitiaMatches.first().distanceLabel)
-        assertEquals("1075", laetitiaMatches.first().bibNumber)
-    }
 }

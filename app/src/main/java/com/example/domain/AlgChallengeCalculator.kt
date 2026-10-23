@@ -53,7 +53,7 @@ data class SimulatedRaceCandidate(
     val race: RaceEntity,
     val isPlanned: Boolean,
     val targetPoints: Int,
-    val terrainCondition: String
+    val terrainCondition: String?
 )
 
 /**
@@ -100,7 +100,9 @@ data class DistanceChallengeSummary(
     val averagePaceFormatted: String,
     val averageSpeedKmh: Double,
     val totalDistanceRunKm: Double,
+    /** Somme des D+ connus (traces GPX importées) ; voir elevationKnownRacesCount. */
     val totalElevationGainMeters: Int,
+    val elevationKnownRacesCount: Int,
     val current15thRaceThresholdPoints: Int?,
     val top15RaceIds: Set<String>,
     val simulatorSummary: Top15SimulationSummary,
@@ -110,7 +112,7 @@ data class DistanceChallengeSummary(
 }
 
 /**
- * Progression d'un des 6 Fiefs / Territoires de Gaume.
+ * Progression d'un des fiefs (territoires du jeu, découpés sur les lieux réels des manches).
  */
 data class GaumeTerritoryConquestProgress(
     val territoryId: String,
@@ -167,7 +169,7 @@ data class GaumeTrioQuestProgress(
 )
 
 /**
- * 3) Tampon officiel de village dans le Passeport Collector de Gaume.
+ * 3) Tampon de village dans le Passeport Collector de Gaume (élément du jeu).
  */
 data class GaumeVillageStampItem(
     val raceId: String,
@@ -350,6 +352,7 @@ object AlgChallengeCalculator {
             racesWithGeo = racesWithGeo,
             distanceResults = results10km,
             terrainWeatherByRaceId = terrainWeatherByRaceId,
+            metricsByRaceId = metricsByRaceId,
             allSeasonResultsAllRunners = cleanAllSeasonResults
         )
 
@@ -361,6 +364,7 @@ object AlgChallengeCalculator {
             racesWithGeo = racesWithGeo,
             distanceResults = results5km,
             terrainWeatherByRaceId = terrainWeatherByRaceId,
+            metricsByRaceId = metricsByRaceId,
             allSeasonResultsAllRunners = cleanAllSeasonResults
         )
 
@@ -398,11 +402,10 @@ object AlgChallengeCalculator {
             )
         }
 
-        val totalKm = results10km.size * 10.0 + results5km.size * 5.0
-        val completedRaceIdsAnyDistance = (results10km.map { it.raceId } + results5km.map { it.raceId }).toSet()
-        val totalElev = racesInSeason
-            .filter { it.raceId in completedRaceIdsAnyDistance }
-            .sumOf { it.elevationGainMeters }
+        val raceByIdForTotals = racesInSeason.associateBy { it.raceId }
+        val totalKm = results10km.sumOf { realKmOfResult(it, raceByIdForTotals[it.raceId], 10) } +
+            results5km.sumOf { realKmOfResult(it, raceByIdForTotals[it.raceId], 5) }
+        val totalElev = summary10km.totalElevationGainMeters + summary5km.totalElevationGainMeters
 
         return RunnerChallengeSummary(
             profile = profile,
@@ -415,6 +418,18 @@ object AlgChallengeCalculator {
         )
     }
 
+    /**
+     * Distance réelle couverte pour un résultat : longueur publiée par MyChrono pour cette distance,
+     * sinon déduite du temps et de la vitesse officiels (eux-mêmes calculés sur la longueur réelle).
+     */
+    fun realKmOfResult(result: RaceResultEntity, race: RaceEntity?, distanceKm: Int): Double =
+        race?.realDistanceKmFor(distanceKm)
+            ?: (result.speedKmh * result.officialTimeSeconds / 3600.0)
+
+    /** D+ connu d'une manche courue : trace GPX importée, sinon D+ publié pour la manche (10 km). */
+    fun knownElevationForRace(race: RaceEntity, metrics: ActivityMetricsEntity?, distanceKm: Int): Int? =
+        metrics?.elevationGainMeters ?: if (distanceKm == 10) race.elevationGainMeters else null
+
     private fun computeDistanceChallenge(
         distanceKm: Int,
         distanceLabel: String,
@@ -423,6 +438,7 @@ object AlgChallengeCalculator {
         racesWithGeo: List<Pair<RaceEntity, GaumeVillageGeo>>,
         distanceResults: List<RaceResultEntity>,
         terrainWeatherByRaceId: Map<String, RaceTerrainWeatherEntity>,
+        metricsByRaceId: Map<String, ActivityMetricsEntity>,
         allSeasonResultsAllRunners: List<RaceResultEntity>
     ): DistanceChallengeSummary {
         val validResults = if (hasAssignedBib) distanceResults else emptyList()
@@ -459,8 +475,10 @@ object AlgChallengeCalculator {
         val bestRank = validResults.minOfOrNull { it.overallRank }
 
         val avgPaceFormatted = if (validResults.isNotEmpty()) {
-            val avgTimeSec = validResults.map { it.officialTimeSeconds }.average()
-            val paceSecPerKm = (avgTimeSec / distanceKm.toDouble()).roundToInt()
+            // Moyenne des allures réelles (temps / longueur réelle de chaque parcours).
+            val paceSecPerKm = validResults.map { res ->
+                res.officialTimeSeconds / realKmOfResult(res, raceById[res.raceId], distanceKm)
+            }.average().roundToInt()
             "%d:%02d /km".format(paceSecPerKm / 60, paceSecPerKm % 60)
         } else {
             "--:-- /km"
@@ -472,13 +490,16 @@ object AlgChallengeCalculator {
             0.0
         }
 
-        val totalDistKm = ((completedCount * distanceKm.toDouble()) * 10.0).roundToInt() / 10.0
+        val totalDistKm = (validResults.sumOf { realKmOfResult(it, raceById[it.raceId], distanceKm) } * 10.0)
+            .roundToInt() / 10.0
         val completedRaceIds = validResults.map { it.raceId }.toSet()
-        val totalElevMeters = racesWithGeo
+        val knownElevations = racesWithGeo
             .filter { it.first.raceId in completedRaceIds }
-            .sumOf { if (distanceKm == 5) (it.first.elevationGainMeters * 0.55).roundToInt() else it.first.elevationGainMeters }
+            .mapNotNull { knownElevationForRace(it.first, metricsByRaceId[it.first.raceId], distanceKm) }
+        val totalElevMeters = knownElevations.sum()
 
-        val defaultTargetPts = if (avgPointsInt > 0) avgPointsInt else 920
+        // Objectif par défaut du simulateur : ta moyenne réelle de points (0 tant qu'aucune course n'est courue).
+        val defaultTargetPts = avgPointsInt
 
         // Candidats du Simulateur Top 15 (courses non encore courues sur cette distance)
         val candidateRaces = racesWithGeo
@@ -486,12 +507,12 @@ object AlgChallengeCalculator {
             .map { (race, _) ->
                 val tw = terrainWeatherByRaceId[race.raceId]
                 val isPlanned = tw?.isPlannedForSimulator == true && tw.plannedDistanceKm == distanceKm
-                val targetPts = (tw?.simulatedTargetPoints ?: defaultTargetPts).coerceIn(100, 1000)
+                val targetPts = (tw?.simulatedTargetPoints ?: defaultTargetPts).coerceIn(0, 1200)
                 SimulatedRaceCandidate(
                     race = race,
                     isPlanned = isPlanned,
                     targetPoints = targetPts,
-                    terrainCondition = tw?.terrainCondition ?: "Sec"
+                    terrainCondition = tw?.terrainCondition
                 )
             }
 
@@ -553,6 +574,7 @@ object AlgChallengeCalculator {
             averageSpeedKmh = avgSpeedKmh,
             totalDistanceRunKm = totalDistKm,
             totalElevationGainMeters = totalElevMeters,
+            elevationKnownRacesCount = knownElevations.size,
             current15thRaceThresholdPoints = threshold15th,
             top15RaceIds = top15RaceIds,
             simulatorSummary = simulatorSummary,
@@ -701,7 +723,7 @@ object AlgChallengeCalculator {
             GaumeTrioQuestProgress(
                 questId = "quest_passport_5",
                 title = "Passeport des 5 Villages",
-                description = "Obtenir 5 tampons officiels de villages différents dans le Passeport Collector.",
+                description = "Obtenir 5 tampons de villages différents dans le Passeport Collector.",
                 categoryTag = "PASSEPORT",
                 currentProgress = conqueredVillagesTotal.coerceAtMost(5),
                 targetProgress = 5,
@@ -721,14 +743,15 @@ object AlgChallengeCalculator {
                 accentColorHex = 0xFFD49B1B
             ),
             GaumeTrioQuestProgress(
-                questId = "quest_fiefs_all_6",
-                title = "Unificateur des 6 Fiefs",
-                description = "Courir dans chacun des 6 Fiefs de Gaume (Orval, Chiny, Rulles, Étalle, Virton, Saint-Léger).",
+                questId = "quest_fiefs_all",
+                title = "Unificateur des $totalTerritoriesCount Fiefs",
+                description = "Courir dans chacun des $totalTerritoriesCount fiefs du jeu (" +
+                    GaumeInitialSeedData.gaumeTerritories.joinToString(", ") { it.title.substringBefore(" &").substringBefore(",") } + ").",
                 categoryTag = "TERROIR",
-                currentProgress = conqueredTerritoriesCount.coerceAtMost(6),
-                targetProgress = 6,
+                currentProgress = conqueredTerritoriesCount.coerceAtMost(totalTerritoriesCount),
+                targetProgress = totalTerritoriesCount,
                 rewardXp = 400,
-                isCompleted = conqueredTerritoriesCount >= 6 && totalTerritoriesCount > 0,
+                isCompleted = conqueredTerritoriesCount >= totalTerritoriesCount && totalTerritoriesCount > 0,
                 accentColorHex = 0xFFC85A32
             ),
             GaumeTrioQuestProgress(
@@ -784,8 +807,8 @@ object AlgChallengeCalculator {
         val specialBadges = listOf(
             GaumeBadgeItem(
                 badgeId = "badge_grand_duc_gaume",
-                title = "Unificateur des 6 Fiefs",
-                description = "Avoir couru au moins une manche dans chacun des 6 fiefs de Gaume",
+                title = "Unificateur des $totalTerritoriesCount Fiefs",
+                description = "Avoir couru au moins une manche dans chacun des $totalTerritoriesCount fiefs du jeu",
                 categoryLabel = "Légende",
                 isUnlocked = conqueredTerritoriesCount == totalTerritoriesCount && totalTerritoriesCount > 0,
                 progressText = "$conqueredTerritoriesCount/$totalTerritoriesCount fiefs",

@@ -60,7 +60,10 @@ import com.example.domain.AlgChallengeCalculator
 import com.example.domain.DistanceChallengeSummary
 import com.example.domain.RaceItemWithContext
 import com.example.domain.RunnerChallengeSummary
+import com.example.data.local.RunnerProfileEntity
+import com.example.domain.ProfileChallengeStanding
 import com.example.domain.SameCourseYearComparison
+import com.example.ui.components.ChallengeStandingCard
 import com.example.ui.components.EditProfileBibAndDistanceDialog
 import com.example.ui.components.GaumeConquestGamificationCard
 import com.example.ui.components.GaumePerfsAndToolsHubSection
@@ -87,6 +90,8 @@ fun RunnerOverviewScreen(
     preselectedShareRaceId: String? = null,
     multiSeasonSummaries: Map<Int, RunnerChallengeSummary> = emptyMap(),
     sameCourseComparisons2026Vs2027: List<SameCourseYearComparison> = emptyList(),
+    trioStandings: Map<String, Map<Int, ProfileChallengeStanding>> = emptyMap(),
+    profiles: List<RunnerProfileEntity> = emptyList(),
     onSelectDistanceKm: (Int) -> Unit,
     onSelectFilterMode: (RaceFilterMode) -> Unit,
     onOpenRaceDetail: (String) -> Unit,
@@ -175,7 +180,18 @@ fun RunnerOverviewScreen(
 
         when (activeBottomTab) {
             AlgBottomTab.OVERVIEW -> {
-                // ONGLET 1 : COURSES (Liste épurée + Pronostic Prochaine Manche + Filtres rapides)
+                // ONGLET 1 : COURSES (Classement provisoire + Pronostic Prochaine Manche + Liste + Filtres rapides)
+                if (activeDistanceSummary.hasAssignedBib) {
+                    item {
+                        ChallengeStandingCard(
+                            activeProfile = summary.profile,
+                            selectedDistanceKm = selectedDistanceKm,
+                            trioStandings = trioStandings,
+                            profiles = profiles
+                        )
+                    }
+                }
+
                 if (activeDistanceSummary.hasAssignedBib) {
                     item {
                         NextUpcomingPronosticBannerCard(
@@ -348,7 +364,7 @@ fun RunnerOverviewScreen(
             }
 
             AlgBottomTab.BADGES -> {
-                // ONGLET 4 : BADGES (Passeport Collector, Série Streak, Les 6 Fiefs & Quêtes du Trio)
+                // ONGLET 4 : BADGES (Passeport Collector, Série Streak, Fiefs & Quêtes du Trio)
                 item {
                     GaumeConquestGamificationCard(
                         runnerName = summary.profile.displayName,
@@ -1091,7 +1107,7 @@ private fun RaceRoundOverviewCard(
                         color = SemoisRiverTeal.copy(alpha = 0.14f)
                     ) {
                         Text(
-                            text = "Prévue (${tw?.simulatedTargetPoints ?: 920} pts)",
+                            text = tw?.simulatedTargetPoints?.let { "Prévue ($it pts)" } ?: "Prévue",
                             style = MaterialTheme.typography.labelSmall,
                             color = SemoisRiverTeal,
                             fontWeight = FontWeight.Bold,

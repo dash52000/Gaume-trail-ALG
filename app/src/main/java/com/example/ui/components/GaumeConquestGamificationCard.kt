@@ -68,9 +68,9 @@ private enum class GamificationSectionTab {
 
 /**
  * Carte de Gamification Complète :
- * 1) Passeport Collector de Gaume avec Tampons Officiels par village
+ * 1) Passeport Collector de Gaume avec un tampon par village (élément du jeu)
  * 2) Série de régularité (Streak), Bonus de fidélité & Quêtes du Trio en Gaume
- * 3) Conquête des 6 Fiefs de Gaume
+ * 3) Conquête des fiefs de Gaume
  * 4) 9 Badges de Terroir & Trophées
  */
 @Composable
@@ -230,7 +230,7 @@ fun GaumeConquestGamificationCard(
                 val tabs = listOf(
                     Triple(GamificationSectionTab.PASSPORT_STAMPS, "Passeport ($stampedVillagesCount)", "gamification_tab_passport"),
                     Triple(GamificationSectionTab.STREAK_AND_QUESTS, "Quêtes & Série", "gamification_tab_quests"),
-                    Triple(GamificationSectionTab.TERRITORIES, "Fiefs (${conquest.territoriesConqueredCount}/6)", "gamification_tab_territories"),
+                    Triple(GamificationSectionTab.TERRITORIES, "Fiefs (${conquest.territoriesConqueredCount}/${conquest.totalTerritoriesCount})", "gamification_tab_territories"),
                     Triple(GamificationSectionTab.BADGES, "Badges ($unlockedBadgesCount)", "gamification_tab_badges")
                 )
 
@@ -351,7 +351,7 @@ private fun GaumeCollectorPassportSection(
                     )
                     Text(
                         text = if (stampedCount > 0) {
-                            "$stampedCount tampon(s) officiel(s) validé(s) sur ${stamps.size} villages"
+                            "$stampedCount tampon(s) validé(s) sur ${stamps.size} villages"
                         } else {
                             "0 tampon validé • Courez une manche avec votre dossard pour tamponner le village"
                         },

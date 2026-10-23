@@ -486,7 +486,7 @@ fun Top15StatusBadge(
 fun GaumeGpsAndElevationCanvas(
     trackPoints: List<TrackPoint>,
     recordedDistanceKm: Double,
-    elevationGainMeters: Int,
+    elevationGainMeters: Int?,
     sourceLabel: String,
     modifier: Modifier = Modifier
 ) {
@@ -533,7 +533,7 @@ fun GaumeGpsAndElevationCanvas(
                     color = primaryForest.copy(alpha = 0.14f)
                 ) {
                     Text(
-                        text = "${recordedDistanceKm} km • +${elevationGainMeters}m D+",
+                        text = "${recordedDistanceKm} km • " + (elevationGainMeters?.let { "+${it} m D+" } ?: "D+ inconnu"),
                         style = MaterialTheme.typography.labelMedium,
                         color = primaryForest,
                         fontWeight = FontWeight.Bold,
@@ -625,9 +625,11 @@ fun GaumeGpsAndElevationCanvas(
                         shape = RoundedCornerShape(12.dp),
                         color = MaterialTheme.colorScheme.surface
                     ) {
-                        val elevations = trackPoints.map { it.elevationMeters }
-                        val minEle = elevations.minOrNull()?.toInt() ?: 210
-                        val maxEle = elevations.maxOrNull()?.toInt() ?: 350
+                        // Seuls les points ayant une altitude dans le fichier sont dessinés (aucune altitude inventée).
+                        val profilePoints = trackPoints.filter { !it.elevationMeters.isNaN() }
+                        val elevations = profilePoints.map { it.elevationMeters }
+                        val minEle = elevations.minOrNull()?.toInt()
+                        val maxEle = elevations.maxOrNull()?.toInt()
 
                         Box(modifier = Modifier.fillMaxSize()) {
                             Canvas(
@@ -635,15 +637,16 @@ fun GaumeGpsAndElevationCanvas(
                                     .fillMaxSize()
                                     .padding(horizontal = 10.dp, vertical = 18.dp)
                             ) {
-                                val minE = elevations.minOrNull() ?: 200.0
-                                val maxE = elevations.maxOrNull() ?: 350.0
+                                if (profilePoints.size < 2) return@Canvas
+                                val minE = elevations.minOrNull() ?: 0.0
+                                val maxE = elevations.maxOrNull() ?: 0.0
                                 val eleSpan = max(5.0, maxE - minE)
 
                                 val linePath = Path()
                                 val fillPath = Path()
 
-                                trackPoints.forEachIndexed { idx, pt ->
-                                    val x = (idx.toFloat() / max(1, trackPoints.lastIndex)) * size.width
+                                profilePoints.forEachIndexed { idx, pt ->
+                                    val x = (idx.toFloat() / max(1, profilePoints.lastIndex)) * size.width
                                     val normalizedY = ((pt.elevationMeters - minE) / eleSpan).toFloat()
                                     val y = (1f - normalizedY) * size.height
                                     if (idx == 0) {
@@ -675,7 +678,7 @@ fun GaumeGpsAndElevationCanvas(
                             }
 
                             Text(
-                                text = "Max ${maxEle}m",
+                                text = maxEle?.let { "Max ${it}m" } ?: "Pas d'altitude",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = accentTerracotta,
                                 modifier = Modifier
@@ -683,7 +686,7 @@ fun GaumeGpsAndElevationCanvas(
                                     .padding(6.dp)
                             )
                             Text(
-                                text = "Min ${minEle}m",
+                                text = minEle?.let { "Min ${it}m" } ?: "",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier

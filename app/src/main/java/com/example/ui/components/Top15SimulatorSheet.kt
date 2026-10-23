@@ -375,7 +375,7 @@ fun Top15SimulatorModalDialog(
                                             overflow = TextOverflow.Ellipsis
                                         )
                                         Text(
-                                            text = "${candidate.race.village} • ${candidate.race.dateIso} • Terrain ${candidate.terrainCondition}",
+                                            text = "${candidate.race.village} • ${candidate.race.dateIso}" + (candidate.terrainCondition?.let { " • Terrain $it" } ?: ""),
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                                             maxLines = 1,
@@ -401,7 +401,7 @@ fun Top15SimulatorModalDialog(
                                                 onTogglePlannedRace(
                                                     candidate.race.raceId,
                                                     true,
-                                                    (candidate.targetPoints - 10).coerceAtLeast(100)
+                                                    (candidate.targetPoints - 10).coerceAtLeast(0)
                                                 )
                                             }
                                     ) {
@@ -437,7 +437,7 @@ fun Top15SimulatorModalDialog(
                                                 onTogglePlannedRace(
                                                     candidate.race.raceId,
                                                     true,
-                                                    (candidate.targetPoints + 10).coerceAtMost(1000)
+                                                    (candidate.targetPoints + 10).coerceAtMost(1200)
                                                 )
                                             }
                                     ) {

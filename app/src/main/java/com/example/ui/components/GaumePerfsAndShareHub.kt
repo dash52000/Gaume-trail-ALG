@@ -105,10 +105,10 @@ data class GaumeRacePronosticEntry(
     val raceTitle: String,
     val dateIso: String,
     val distanceKm: Double,
-    val elevationGainMeters: Int,
-    val terrainCondition: String,
-    val recentEquivalentFlatPaceSecPerKm: Int,
-    val recentEquivalentFlatPaceFormatted: String,
+    val elevationGainMeters: Int?,
+    val terrainCondition: String?,
+    val recentAveragePaceSecPerKm: Int,
+    val recentAveragePaceFormatted: String,
     val predictedTimeSeconds: Int,
     val predictedTimeFormatted: String,
     val predictedPaceSecPerKm: Int,
@@ -134,8 +134,8 @@ data class GaumeRecentReferenceRace(
     val dateIso: String,
     val officialTimeFormatted: String,
     val pacePerKmFormatted: String,
-    val elevationGainMeters: Int,
-    val equivalentFlatPaceFormatted: String
+    val elevationGainMeters: Int?,
+    val paceUsedFormatted: String
 )
 
 /**
@@ -146,9 +146,9 @@ data class GaumeSeasonPronosticsSummary(
     val distanceKm: Int,
     val distanceLabel: String,
     val hasAssignedBib: Boolean,
-    val recentEquivalentFlatPaceSecPerKm: Int,
-    val recentEquivalentFlatPaceFormatted: String,
-    val recentEquivalentSpeedKmh: Double,
+    val recentAveragePaceSecPerKm: Int,
+    val recentAveragePaceFormatted: String,
+    val recentAverageSpeedKmh: Double,
     val recentReferenceRaces: List<GaumeRecentReferenceRace> = emptyList(),
     val nextUpcomingPronostic: GaumeRacePronosticEntry?,
     val completedWithVerdict: List<GaumeRacePronosticEntry>,
@@ -182,53 +182,42 @@ data class GaumePersonalRecordsSummary(
 
 object GaumePerfsCalculator {
 
-    private fun terrainPenaltyMultiplier(terrainCondition: String?): Double {
-        return when (terrainCondition?.trim()) {
-            "Souple" -> 1.022
-            "Boueux" -> 1.052
-            "Très gras" -> 1.085
-            else -> 1.0
-        }
-    }
+    /** Libellé de D+ : jamais de valeur inventée. */
+    fun dPlusLabel(meters: Int?): String = meters?.let { "+$it m D+" } ?: "D+ inconnu"
 
-    private fun effectiveDistanceForChallenge(item: RaceItemWithContext, selectedDistanceKm: Int): Double {
-        return if (selectedDistanceKm == 5) {
-            5.0
-        } else {
-            item.race.distanceKm.takeIf { it >= 5.0 } ?: 10.0
-        }
-    }
+    /** Longueur réelle publiée par MyChrono pour la distance du challenge, ou null si non publiée. */
+    fun realDistanceKm(item: RaceItemWithContext, selectedDistanceKm: Int): Double? =
+        item.race.realDistanceKmFor(selectedDistanceKm)
 
-    private fun effectiveElevationForChallenge(item: RaceItemWithContext, selectedDistanceKm: Int): Int {
-        val rawElev = item.activityMetrics?.elevationGainMeters ?: item.race.elevationGainMeters
-        return if (selectedDistanceKm == 5) {
-            (rawElev * 0.52).roundToInt().coerceAtLeast(25)
-        } else {
-            rawElev.coerceAtLeast(35)
-        }
-    }
+    /** D+ connu pour la distance : mesuré sur la trace GPX importée, sinon publié pour la manche (10 km). */
+    fun knownElevation(item: RaceItemWithContext, selectedDistanceKm: Int): Int? =
+        AlgChallengeCalculator.knownElevationForRace(item.race, item.activityMetrics, selectedDistanceKm)
 
-    /**
-     * Convertit le chrono réel d'une manche vallonnée en Allure Équivalente sur Plat (sec/km)
-     * en neutralisant le coût du dénivelé (+100 m D+ ≈ +0.78 km d'effort plat) et du terrain.
-     */
-    fun computeEquivalentFlatPaceSecPerKm(
-        item: RaceItemWithContext,
-        selectedDistanceKm: Int
-    ): Int? {
+    /** Allure réelle d'une manche courue (temps officiel / longueur réelle du parcours), en s/km. */
+    fun actualPaceSecPerKm(item: RaceItemWithContext, selectedDistanceKm: Int): Int? {
         val res = item.resultForDistance(selectedDistanceKm) ?: return null
-        val effDistKm = effectiveDistanceForChallenge(item, selectedDistanceKm)
-        val effElevM = effectiveElevationForChallenge(item, selectedDistanceKm)
-        val terrainMult = terrainPenaltyMultiplier(item.terrainWeather?.terrainCondition)
-        val flatEquivalentEffortKm = effDistKm + (effElevM / 100.0) * 0.78
-        if (flatEquivalentEffortKm <= 0.5) return null
-        val cleanFlatSeconds = res.officialTimeSeconds / terrainMult
-        return (cleanFlatSeconds / flatEquivalentEffortKm).roundToInt().coerceIn(165, 540)
+        val km = AlgChallengeCalculator.realKmOfResult(res, item.race, selectedDistanceKm)
+        if (km <= 0.5) return null
+        return (res.officialTimeSeconds / km).roundToInt()
     }
 
     /**
-     * Calcule les pronostics UNIQUEMENT pour les prochaines manches à venir (non encore courues)
-     * et exclusivement à partir de l'historique récent (les 3 dernières courses courues).
+     * Allure « km-effort » (convention ITRA : 100 m de D+ comptent comme 1 km) d'une manche courue,
+     * seulement si son D+ est connu (trace GPX). Sinon null.
+     */
+    fun kmEffortPaceSecPerKm(item: RaceItemWithContext, selectedDistanceKm: Int): Int? {
+        val res = item.resultForDistance(selectedDistanceKm) ?: return null
+        val dPlus = knownElevation(item, selectedDistanceKm) ?: return null
+        val km = AlgChallengeCalculator.realKmOfResult(res, item.race, selectedDistanceKm)
+        val kmEffort = km + dPlus / 100.0
+        if (kmEffort <= 0.5) return null
+        return (res.officialTimeSeconds / kmEffort).roundToInt()
+    }
+
+    /**
+     * Pronostics des prochaines manches, calculés UNIQUEMENT à partir des 3 dernières courses courues :
+     * allure moyenne réelle × longueur réelle du prochain parcours.
+     * Le D+ des parcours à venir n'étant pas publié, il n'est pas pris en compte.
      */
     fun computeSeasonPronostics(
         summary: RunnerChallengeSummary,
@@ -237,14 +226,11 @@ object GaumePerfsCalculator {
         val distSummary = summary.challengeForDistance(selectedDistanceKm)
         val sortedItems = summary.racesWithContext.sortedBy { it.race.roundNumber }
 
-        // Extraction des courses réellement courues sur cette distance avec leur allure équivalente plat
         val completedTriples = sortedItems.mapNotNull { item ->
             val res = item.resultForDistance(selectedDistanceKm) ?: return@mapNotNull null
-            val flatPace = computeEquivalentFlatPaceSecPerKm(item, selectedDistanceKm) ?: return@mapNotNull null
-            Triple(item, res, flatPace)
+            val pace = actualPaceSecPerKm(item, selectedDistanceKm) ?: return@mapNotNull null
+            Triple(item, res, pace)
         }
-
-        // Sélection stricte des 3 dernières courses courues (historique récent)
         val recentLast3 = completedTriples.takeLast(3)
 
         if (recentLast3.isEmpty()) {
@@ -252,9 +238,9 @@ object GaumePerfsCalculator {
                 distanceKm = selectedDistanceKm,
                 distanceLabel = distSummary.distanceLabel,
                 hasAssignedBib = distSummary.hasAssignedBib,
-                recentEquivalentFlatPaceSecPerKm = 0,
-                recentEquivalentFlatPaceFormatted = "--:-- /km",
-                recentEquivalentSpeedKmh = 0.0,
+                recentAveragePaceSecPerKm = 0,
+                recentAveragePaceFormatted = "--:-- /km",
+                recentAverageSpeedKmh = 0.0,
                 recentReferenceRaces = emptyList(),
                 nextUpcomingPronostic = null,
                 completedWithVerdict = emptyList(),
@@ -267,11 +253,11 @@ object GaumePerfsCalculator {
             )
         }
 
-        val currentRecentFlatPaceSec = recentLast3.map { it.third }.average().roundToInt()
-        val refFlatPaceStr = "${formatSecondsToMmSs(currentRecentFlatPaceSec)} /km"
-        val eqSpeedKmh = ((3600.0 / currentRecentFlatPaceSec) * 10.0).roundToInt() / 10.0
+        val recentPaceSec = recentLast3.map { it.third }.average().roundToInt()
+        val recentPaceStr = "${formatSecondsToMmSs(recentPaceSec)} /km"
+        val recentSpeedKmh = ((3600.0 / recentPaceSec) * 10.0).roundToInt() / 10.0
 
-        val recentReferenceRaces = recentLast3.reversed().map { (item, res, flatPaceSec) ->
+        val recentReferenceRaces = recentLast3.reversed().map { (item, res, paceSec) ->
             GaumeRecentReferenceRace(
                 raceId = item.race.raceId,
                 roundNumber = item.race.roundNumber,
@@ -279,32 +265,24 @@ object GaumePerfsCalculator {
                 dateIso = item.race.dateIso,
                 officialTimeFormatted = res.officialTimeFormatted,
                 pacePerKmFormatted = res.pacePerKmFormatted,
-                elevationGainMeters = effectiveElevationForChallenge(item, selectedDistanceKm),
-                equivalentFlatPaceFormatted = "${formatSecondsToMmSs(flatPaceSec)} /km"
+                elevationGainMeters = knownElevation(item, selectedDistanceKm),
+                paceUsedFormatted = "${formatSecondsToMmSs(paceSec)} /km"
             )
         }
 
         val maxCompletedRound = completedTriples.maxOf { it.first.race.roundNumber }
 
-        // Uniquement les prochaines manches à venir (situées après la dernière manche courue et sans résultat)
         val upcomingItems = sortedItems.filter { targetItem ->
             targetItem.resultForDistance(selectedDistanceKm) == null &&
                 !targetItem.race.isCompleted &&
                 targetItem.race.roundNumber > maxCompletedRound
         }
 
-        val upcomingList = upcomingItems.map { targetItem ->
-            val effDist = effectiveDistanceForChallenge(targetItem, selectedDistanceKm)
-            val effElev = effectiveElevationForChallenge(targetItem, selectedDistanceKm)
-            val terrainCond = targetItem.terrainWeather?.terrainCondition ?: "Sec"
-            val terrainMult = terrainPenaltyMultiplier(terrainCond)
-
-            val flatEffortKm = effDist + (effElev / 100.0) * 0.78
-            val predictedTimeSec = (currentRecentFlatPaceSec * flatEffortKm * terrainMult).roundToInt()
-            val predictedPaceSec = (predictedTimeSec / effDist).roundToInt()
-
+        val upcomingList = upcomingItems.mapNotNull { targetItem ->
+            // Sans longueur publiée, pas de pronostic (on ne suppose pas « 5 km » ou « 10 km » pile).
+            val realKm = realDistanceKm(targetItem, selectedDistanceKm) ?: return@mapNotNull null
+            val predictedTimeSec = (recentPaceSec * realKm).roundToInt()
             val predictedTimeStr = formatSecondsToMmSs(predictedTimeSec)
-            val predictedPaceStr = "${formatSecondsToMmSs(predictedPaceSec)} /km"
 
             GaumeRacePronosticEntry(
                 raceId = targetItem.race.raceId,
@@ -312,15 +290,15 @@ object GaumePerfsCalculator {
                 villageName = targetItem.gaumeGeo.canonicalVillage,
                 raceTitle = targetItem.race.title,
                 dateIso = targetItem.race.dateIso,
-                distanceKm = effDist,
-                elevationGainMeters = effElev,
-                terrainCondition = terrainCond,
-                recentEquivalentFlatPaceSecPerKm = currentRecentFlatPaceSec,
-                recentEquivalentFlatPaceFormatted = refFlatPaceStr,
+                distanceKm = realKm,
+                elevationGainMeters = knownElevation(targetItem, selectedDistanceKm),
+                terrainCondition = targetItem.terrainWeather?.terrainCondition,
+                recentAveragePaceSecPerKm = recentPaceSec,
+                recentAveragePaceFormatted = recentPaceStr,
                 predictedTimeSeconds = predictedTimeSec,
                 predictedTimeFormatted = predictedTimeStr,
-                predictedPaceSecPerKm = predictedPaceSec,
-                predictedPaceFormatted = predictedPaceStr,
+                predictedPaceSecPerKm = recentPaceSec,
+                predictedPaceFormatted = recentPaceStr,
                 actualTimeSeconds = null,
                 actualTimeFormatted = null,
                 actualPaceFormatted = null,
@@ -328,22 +306,20 @@ object GaumePerfsCalculator {
                 deltaSeconds = null,
                 deltaFormatted = null,
                 verdict = GaumeRacePronosticVerdict.UPCOMING,
-                verdictLabel = "Pronostic : $predictedTimeStr ($predictedPaceStr)",
+                verdictLabel = "Pronostic : $predictedTimeStr ($recentPaceStr)",
                 verdictShortBadge = "Prévu ~$predictedTimeStr"
             )
         }
-
-        val nextUpcoming = upcomingList.firstOrNull()
 
         return GaumeSeasonPronosticsSummary(
             distanceKm = selectedDistanceKm,
             distanceLabel = distSummary.distanceLabel,
             hasAssignedBib = distSummary.hasAssignedBib,
-            recentEquivalentFlatPaceSecPerKm = currentRecentFlatPaceSec,
-            recentEquivalentFlatPaceFormatted = refFlatPaceStr,
-            recentEquivalentSpeedKmh = eqSpeedKmh,
+            recentAveragePaceSecPerKm = recentPaceSec,
+            recentAveragePaceFormatted = recentPaceStr,
+            recentAverageSpeedKmh = recentSpeedKmh,
             recentReferenceRaces = recentReferenceRaces,
-            nextUpcomingPronostic = nextUpcoming,
+            nextUpcomingPronostic = upcomingList.firstOrNull(),
             completedWithVerdict = emptyList(),
             upcomingPronostics = upcomingList,
             allPronosticsByRaceId = upcomingList.associateBy { it.raceId },
@@ -382,7 +358,7 @@ object GaumePerfsCalculator {
             GaumePersonalRecordEntry(
                 categoryTitle = "Record de Vitesse & Allure",
                 mainValue = "${res.pacePerKmFormatted} • ${"%.2f".format(res.speedKmh)} km/h",
-                secondaryValue = "Chrono : ${res.officialTimeFormatted} (${item.race.distanceKm} km)",
+                secondaryValue = "Chrono : ${res.officialTimeFormatted} (${"%.1f".format(AlgChallengeCalculator.realKmOfResult(res, item.race, distKm))} km)",
                 villageAndRound = "${item.gaumeGeo.canonicalVillage} (Manche #${item.race.roundNumber})",
                 dateIso = item.race.dateIso,
                 accentColorHex = 0xFF1B5E3A
@@ -393,7 +369,7 @@ object GaumePerfsCalculator {
         val bestPtsEntry = bestPts?.let { (item, res) ->
             GaumePersonalRecordEntry(
                 categoryTitle = "Record de Points Challenge",
-                mainValue = "${res.challengePoints} pts / 1000",
+                mainValue = "${res.challengePoints} pts / 1200",
                 secondaryValue = "Chrono : ${res.officialTimeFormatted} • ${res.overallRank}e scratch",
                 villageAndRound = "${item.gaumeGeo.canonicalVillage} (Manche #${item.race.roundNumber})",
                 dateIso = item.race.dateIso,
@@ -405,11 +381,11 @@ object GaumePerfsCalculator {
         val bestRankEntry = bestRank?.let { (item, res) ->
             val topPct = if (res.totalFinishers > 0) {
                 ((res.overallRank.toDouble() / res.totalFinishers.toDouble()) * 100.0).roundToInt().coerceIn(1, 100)
-            } else 10
+            } else null
             GaumePersonalRecordEntry(
                 categoryTitle = "Meilleure Place Scratch",
                 mainValue = "${res.overallRank}e / ${res.totalFinishers}",
-                secondaryValue = "Top $topPct% du peloton • ${res.challengePoints} pts",
+                secondaryValue = (topPct?.let { "Top $it% du peloton • " } ?: "") + "${res.challengePoints} pts",
                 villageAndRound = "${item.gaumeGeo.canonicalVillage} (Manche #${item.race.roundNumber})",
                 dateIso = item.race.dateIso,
                 accentColorHex = 0xFF006D77
@@ -428,35 +404,36 @@ object GaumePerfsCalculator {
             )
         }
 
-        val biggestElev = completedPairs.maxByOrNull { (item, _) ->
-            item.activityMetrics?.elevationGainMeters ?: item.race.elevationGainMeters
-        }
-        val biggestElevEntry = biggestElev?.let { (item, res) ->
-            val dPlus = item.activityMetrics?.elevationGainMeters ?: item.race.elevationGainMeters
-            val ratioPerKm = if (item.race.distanceKm > 0) (dPlus / item.race.distanceKm).roundToInt() else 15
+        // Seulement les manches dont le D+ est réellement connu (trace GPX importée).
+        val biggestElev = completedPairs
+            .mapNotNull { pair -> knownElevation(pair.first, distKm)?.let { pair to it } }
+            .maxByOrNull { it.second }
+        val biggestElevEntry = biggestElev?.let { (pair, dPlus) ->
+            val (item, res) = pair
+            val km = AlgChallengeCalculator.realKmOfResult(res, item.race, distKm)
+            val ratioPerKm = if (km > 0) (dPlus / km).roundToInt() else null
             GaumePersonalRecordEntry(
                 categoryTitle = "Trophée Grimpeur (Max D+)",
                 mainValue = "+$dPlus m D+",
-                secondaryValue = "$ratioPerKm m D+/km • Finisher en ${res.officialTimeFormatted}",
+                secondaryValue = (ratioPerKm?.let { "$it m D+/km • " } ?: "") + "Finisher en ${res.officialTimeFormatted}",
                 villageAndRound = "${item.gaumeGeo.canonicalVillage} (Manche #${item.race.roundNumber})",
                 dateIso = item.race.dateIso,
                 accentColorHex = 0xFF2B59C3
             )
         }
 
-        val pacesSec = completedPairs.map { (item, res) ->
-            val d = if (distKm == 5) 5.0 else item.race.distanceKm.coerceAtLeast(5.0)
-            (res.officialTimeSeconds / d).roundToInt()
-        }
-        val minPace = pacesSec.minOrNull() ?: 270
-        val maxPace = pacesSec.maxOrNull() ?: 270
+        val pacesSec = completedPairs.mapNotNull { (item, _) -> actualPaceSecPerKm(item, distKm) }
+        val minPace = pacesSec.minOrNull() ?: 0
+        val maxPace = pacesSec.maxOrNull() ?: 0
         val spreadSec = (maxPace - minPace).coerceAtLeast(0)
         val regularityEntry = GaumePersonalRecordEntry(
             categoryTitle = "Régularité & Volume Saison",
             mainValue = "Moy. ${distanceSummary.averagePaceFormatted}",
             secondaryValue = "Écart max : ±${spreadSec / 2}s/km • ${"%.1f".format(distanceSummary.totalDistanceRunKm)} km cumulés",
-            villageAndRound = "${completedPairs.size} manche(s) • +${distanceSummary.totalElevationGainMeters} m D+ total",
-            dateIso = "Saison 2026",
+            villageAndRound = "${completedPairs.size} manche(s)" + if (distanceSummary.elevationKnownRacesCount > 0) {
+                " • +${distanceSummary.totalElevationGainMeters} m D+ (${distanceSummary.elevationKnownRacesCount} trace(s) GPX)"
+            } else "",
+            dateIso = "Saison ${completedPairs.first().first.race.seasonYear}",
             accentColorHex = 0xFF6A4C93
         )
 
@@ -586,7 +563,7 @@ fun NextUpcomingPronosticBannerCard(
                             overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                            text = "${"%.1f".format(nextRace.distanceKm)} km • +${nextRace.elevationGainMeters} m D+ • ${nextRace.dateIso}",
+                            text = "${"%.1f".format(nextRace.distanceKm)} km • ${GaumePerfsCalculator.dPlusLabel(nextRace.elevationGainMeters)} • ${nextRace.dateIso}",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
@@ -650,7 +627,7 @@ fun RacePronosticVsActualMiniBanner(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "Pronostic avant-course (+${entry.elevationGainMeters} m D+)",
+                text = "Pronostic avant-course (${"%.1f".format(entry.distanceKm)} km)",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
@@ -777,7 +754,7 @@ fun GaumePerfsAndToolsHubSection(
                     onOpenRaceDetail = onOpenRaceDetail
                 )
 
-                // Simulateur D+ & Boue en accordéon repliable pour ne pas alourdir l'écran
+                // Simulateur D+ en accordéon repliable pour ne pas alourdir l'écran
                 Surface(
                     shape = RoundedCornerShape(14.dp),
                     color = MaterialTheme.colorScheme.surface,
@@ -808,7 +785,7 @@ fun GaumePerfsAndToolsHubSection(
                             )
                             Column {
                                 Text(
-                                    text = "Simulateur manuel d'allure selon le D+ & la boue",
+                                    text = "Simulateur d'allure selon le dénivelé",
                                     style = MaterialTheme.typography.titleSmall,
                                     fontWeight = FontWeight.ExtraBold
                                 )
@@ -949,18 +926,18 @@ fun GaumePronosticPrevuVsReelSectionCard(
                             verticalArrangement = Arrangement.spacedBy(2.dp)
                         ) {
                             Text(
-                                text = "Allure Équiv. Récente (Plat)",
+                                text = "Allure moyenne récente",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             Text(
-                                text = pronosticsSummary.recentEquivalentFlatPaceFormatted,
+                                text = pronosticsSummary.recentAveragePaceFormatted,
                                 style = MaterialTheme.typography.titleSmall,
                                 fontWeight = FontWeight.Black,
                                 color = MaterialTheme.colorScheme.primary
                             )
                             Text(
-                                text = "${pronosticsSummary.recentEquivalentSpeedKmh} km/h (corrigé D+)",
+                                text = "${pronosticsSummary.recentAverageSpeedKmh} km/h (3 dernières courses)",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -1021,7 +998,7 @@ fun GaumePronosticPrevuVsReelSectionCard(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(
-                                    text = "• M#${ref.roundNumber} ${ref.villageName} (+${ref.elevationGainMeters}m D+)",
+                                    text = "• M#${ref.roundNumber} ${ref.villageName} (${GaumePerfsCalculator.dPlusLabel(ref.elevationGainMeters)})",
                                     style = MaterialTheme.typography.labelSmall,
                                     fontWeight = FontWeight.SemiBold,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1030,7 +1007,7 @@ fun GaumePronosticPrevuVsReelSectionCard(
                                     overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
-                                    text = "${ref.officialTimeFormatted} (${ref.pacePerKmFormatted}) → ${ref.equivalentFlatPaceFormatted} plat",
+                                    text = "${ref.officialTimeFormatted} (${ref.paceUsedFormatted})",
                                     style = MaterialTheme.typography.labelSmall,
                                     fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.primary
@@ -1087,7 +1064,8 @@ fun GaumePronosticPrevuVsReelSectionCard(
                                         overflow = TextOverflow.Ellipsis
                                     )
                                     Text(
-                                        text = "Parcours : ${"%.1f".format(nextUpcoming.distanceKm)} km • +${nextUpcoming.elevationGainMeters} m D+ • Terrain ${nextUpcoming.terrainCondition}",
+                                        text = "Parcours : ${"%.1f".format(nextUpcoming.distanceKm)} km • ${GaumePerfsCalculator.dPlusLabel(nextUpcoming.elevationGainMeters)}" +
+                                            (nextUpcoming.terrainCondition?.let { " • Terrain $it" } ?: ""),
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -1148,7 +1126,8 @@ fun GaumePronosticPrevuVsReelSectionCard(
                                     overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
-                                    text = "${entry.dateIso} • +${entry.elevationGainMeters} m D+ • Terrain ${entry.terrainCondition}",
+                                    text = "${entry.dateIso} • ${GaumePerfsCalculator.dPlusLabel(entry.elevationGainMeters)}" +
+                                        (entry.terrainCondition?.let { " • Terrain $it" } ?: ""),
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     maxLines = 1,
@@ -1319,16 +1298,24 @@ fun GaumeElevationPacePredictorCard(
     selectedDistanceKm: Int,
     activeDistanceSummary: DistanceChallengeSummary
 ) {
-    val defaultBasePaceSec = remember(activeDistanceSummary, selectedDistanceKm) {
-        val completed = summary.racesWithContext.mapNotNull {
-            GaumePerfsCalculator.computeEquivalentFlatPaceSecPerKm(it, selectedDistanceKm)
-        }
-        if (completed.isNotEmpty()) {
-            completed.takeLast(3).average().roundToInt().coerceIn(195, 450)
-        } else {
-            if (selectedDistanceKm == 5) 300 else 248
-        }
+    // Allure de base : 3 dernières courses courues. Allure km-effort si leur D+ est connu (GPX), sinon allure réelle.
+    val recentBase = remember(summary, selectedDistanceKm) {
+        val completed = summary.racesWithContext
+            .sortedBy { it.race.roundNumber }
+            .mapNotNull { item ->
+                val effort = GaumePerfsCalculator.kmEffortPaceSecPerKm(item, selectedDistanceKm)
+                val actual = GaumePerfsCalculator.actualPaceSecPerKm(item, selectedDistanceKm)
+                when {
+                    effort != null -> effort to true
+                    actual != null -> actual to false
+                    else -> null
+                }
+            }
+            .takeLast(3)
+        if (completed.isEmpty()) null
+        else completed.map { it.first }.average().roundToInt() to completed.count { it.second }
     }
+    val defaultBasePaceSec = recentBase?.first ?: if (selectedDistanceKm == 5) 330 else 300
 
     var selectedCalendarRaceId by remember(summary.seasonYear) {
         val nextUpcoming = summary.racesWithContext.firstOrNull { !it.race.isCompleted }
@@ -1339,36 +1326,20 @@ fun GaumeElevationPacePredictorCard(
     val selectedCalendarItem = summary.racesWithContext.find { it.race.raceId == selectedCalendarRaceId }
         ?: summary.racesWithContext.firstOrNull()
 
-    var baseFlatPaceSec by remember(defaultBasePaceSec) { mutableFloatStateOf(defaultBasePaceSec.toFloat()) }
+    var basePaceSec by remember(defaultBasePaceSec) { mutableFloatStateOf(defaultBasePaceSec.toFloat()) }
     var targetElevationMeters by remember(selectedCalendarItem, selectedDistanceKm) {
-        val rawElev = selectedCalendarItem?.race?.elevationGainMeters ?: 155
-        val scaledElev = if (selectedDistanceKm == 5) (rawElev * 0.52).roundToInt() else rawElev
-        mutableFloatStateOf(scaledElev.coerceIn(30, 350).toFloat())
-    }
-    var selectedTerrain by remember { mutableStateOf("Sec") }
-
-    val effectiveDistanceKm = remember(selectedCalendarItem, selectedDistanceKm) {
-        if (selectedDistanceKm == 5) {
-            5.0
-        } else {
-            selectedCalendarItem?.race?.distanceKm?.takeIf { it > 3.0 } ?: 10.0
-        }
+        val known = selectedCalendarItem?.let { GaumePerfsCalculator.knownElevation(it, selectedDistanceKm) }
+        mutableFloatStateOf((known ?: 0).coerceIn(0, 400).toFloat())
     }
 
-    val elevationAdditionalEffortKm = (targetElevationMeters / 100.0) * 0.78
-    val elevationPenaltyTotalSec = (elevationAdditionalEffortKm * baseFlatPaceSec).roundToInt()
+    val publishedDistanceKm = selectedCalendarItem?.let { GaumePerfsCalculator.realDistanceKm(it, selectedDistanceKm) }
+    val effectiveDistanceKm = publishedDistanceKm ?: selectedDistanceKm.toDouble()
 
-    val terrainMultiplier = when (selectedTerrain) {
-        "Souple" -> 1.022
-        "Boueux" -> 1.052
-        "Très gras" -> 1.085
-        else -> 1.0
-    }
-
-    val rawFlatTotalSec = (effectiveDistanceKm * baseFlatPaceSec).roundToInt()
-    val predictedTotalSec = ((rawFlatTotalSec + elevationPenaltyTotalSec) * terrainMultiplier).roundToInt()
+    // Convention km-effort (ITRA) : 100 m de D+ comptent comme 1 km de plat.
+    val kmEffort = effectiveDistanceKm + targetElevationMeters / 100.0
+    val predictedTotalSec = (kmEffort * basePaceSec).roundToInt()
     val predictedPaceSecPerKm = (predictedTotalSec / effectiveDistanceKm).roundToInt()
-    val totalReliefAndMudPenaltySec = (predictedTotalSec - rawFlatTotalSec).coerceAtLeast(0)
+    val reliefPenaltySec = ((targetElevationMeters / 100.0) * basePaceSec).roundToInt()
 
     Card(
         modifier = Modifier
@@ -1396,12 +1367,12 @@ fun GaumeElevationPacePredictorCard(
                 )
                 Column {
                     Text(
-                        text = "Simulateur de Pronostic selon le D+ & la Boue",
+                        text = "Simulateur selon le dénivelé",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.ExtraBold
                     )
                     Text(
-                        text = "Ajustez votre allure équivalente ou la météo du jour (${activeDistanceSummary.distanceLabel})",
+                        text = "Convention km-effort (ITRA) : 100 m de D+ = 1 km (${activeDistanceSummary.distanceLabel})",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -1409,7 +1380,7 @@ fun GaumeElevationPacePredictorCard(
             }
 
             Text(
-                text = "1. Choisir un village de Gaume (pré-remplit la distance et le D+) :",
+                text = "1. Choisir une manche (pré-remplit la distance réelle) :",
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.Bold
             )
@@ -1421,17 +1392,14 @@ fun GaumeElevationPacePredictorCard(
             ) {
                 summary.racesWithContext.forEach { item ->
                     val isSelected = item.race.raceId == selectedCalendarRaceId
-                    val dPlusDisplay = if (selectedDistanceKm == 5) {
-                        (item.race.elevationGainMeters * 0.52).roundToInt()
-                    } else {
-                        item.race.elevationGainMeters
-                    }
+                    val km = GaumePerfsCalculator.realDistanceKm(item, selectedDistanceKm)
                     Surface(
                         modifier = Modifier
                             .clip(RoundedCornerShape(10.dp))
                             .clickable {
                                 selectedCalendarRaceId = item.race.raceId
-                                targetElevationMeters = dPlusDisplay.coerceIn(30, 350).toFloat()
+                                targetElevationMeters =
+                                    (GaumePerfsCalculator.knownElevation(item, selectedDistanceKm) ?: 0).coerceIn(0, 400).toFloat()
                             },
                         shape = RoundedCornerShape(10.dp),
                         color = if (isSelected) {
@@ -1441,7 +1409,7 @@ fun GaumeElevationPacePredictorCard(
                         }
                     ) {
                         Text(
-                            text = "${item.gaumeGeo.canonicalVillage} (+${dPlusDisplay}m)",
+                            text = "${item.gaumeGeo.canonicalVillage} (${km?.let { "%.1f km".format(it) } ?: "? km"})",
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
                             color = if (isSelected) {
@@ -1461,23 +1429,31 @@ fun GaumeElevationPacePredictorCard(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text(
-                        text = "Allure équivalente récente (plat)",
+                        text = if (recentBase != null) "Allure de base (3 dernières courses)" else "Allure de base (à régler)",
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                        text = "${GaumePerfsCalculator.formatSecondsToMmSs(baseFlatPaceSec.roundToInt())} /km",
+                        text = "${GaumePerfsCalculator.formatSecondsToMmSs(basePaceSec.roundToInt())} /km",
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.ExtraBold,
                         color = MaterialTheme.colorScheme.primary
                     )
                 }
                 Slider(
-                    value = baseFlatPaceSec,
-                    onValueChange = { baseFlatPaceSec = it },
-                    valueRange = 195f..450f,
+                    value = basePaceSec,
+                    onValueChange = { basePaceSec = it },
+                    valueRange = 150f..720f,
                     modifier = Modifier.testTag("predictor_base_pace_slider")
                 )
+                if (recentBase != null && recentBase.second < 3) {
+                    Text(
+                        text = "Le D+ des courses de référence n'est connu que via les traces GPX importées : " +
+                            "sans trace, leur allure inclut déjà leur relief.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
 
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -1486,12 +1462,13 @@ fun GaumeElevationPacePredictorCard(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text(
-                        text = "Dénivelé positif du parcours (D+)",
+                        text = "D+ estimé du parcours (à renseigner)",
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                        text = "+${targetElevationMeters.roundToInt()} m D+ (${"%.1f".format(effectiveDistanceKm)} km)",
+                        text = "+${targetElevationMeters.roundToInt()} m D+ (" +
+                            (publishedDistanceKm?.let { "%.1f km".format(it) } ?: "distance non publiée : ${selectedDistanceKm} km") + ")",
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.ExtraBold,
                         color = Color(0xFFC85A32)
@@ -1500,46 +1477,9 @@ fun GaumeElevationPacePredictorCard(
                 Slider(
                     value = targetElevationMeters,
                     onValueChange = { targetElevationMeters = it },
-                    valueRange = 25f..350f,
+                    valueRange = 0f..400f,
                     modifier = Modifier.testTag("predictor_elevation_slider")
                 )
-            }
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                val terrains = listOf(
-                    "Sec" to "Sec (+0%)",
-                    "Souple" to "Souple (+2%)",
-                    "Boueux" to "Boueux (+5%)",
-                    "Très gras" to "Gras (+8%)"
-                )
-                terrains.forEach { (key, label) ->
-                    val isSel = selectedTerrain == key
-                    Surface(
-                        modifier = Modifier
-                            .weight(1f)
-                            .clip(RoundedCornerShape(10.dp))
-                            .clickable { selectedTerrain = key },
-                        shape = RoundedCornerShape(10.dp),
-                        color = if (isSel) {
-                            Color(0xFF1B5E3A)
-                        } else {
-                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
-                        }
-                    ) {
-                        Text(
-                            text = label,
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium,
-                            color = if (isSel) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = TextAlign.Center,
-                            maxLines = 1,
-                            modifier = Modifier.padding(vertical = 7.dp, horizontal = 4.dp)
-                        )
-                    }
-                }
             }
 
             Surface(
@@ -1559,7 +1499,7 @@ fun GaumeElevationPacePredictorCard(
                     ) {
                         Column {
                             Text(
-                                text = "CHRONO PRONOSTIQUÉ",
+                                text = "CHRONO ESTIMÉ",
                                 style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.primary
@@ -1573,7 +1513,7 @@ fun GaumeElevationPacePredictorCard(
                         }
                         Column(horizontalAlignment = Alignment.End) {
                             Text(
-                                text = "ALLURE CIBLE AJUSTÉE",
+                                text = "ALLURE MOYENNE",
                                 style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.primary
@@ -1588,39 +1528,11 @@ fun GaumeElevationPacePredictorCard(
                     }
 
                     Text(
-                        text = "Impact relief & terrain : +${GaumePerfsCalculator.formatSecondsToMmSs(totalReliefAndMudPenaltySec)} par rapport à un parcours plat sec (+${targetElevationMeters.roundToInt()} m D+, terrain ${selectedTerrain.lowercase()}).",
+                        text = "Effet du relief : +${GaumePerfsCalculator.formatSecondsToMmSs(reliefPenaltySec)} " +
+                            "(${"%.1f".format(kmEffort)} km-effort). Le terrain et la météo ne sont pas modélisés.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f)
                     )
-
-                    HorizontalDivider(color = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f))
-
-                    val splitMarkers = if (selectedDistanceKm == 5) {
-                        listOf(1.0 to "Km 1", 2.5 to "Km 2,5", 4.0 to "Km 4", effectiveDistanceKm to "Arrivée")
-                    } else {
-                        listOf(2.0 to "Km 2", 5.0 to "Km 5", 8.0 to "Km 8", effectiveDistanceKm to "Arrivée")
-                    }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        splitMarkers.forEach { (kmMark, label) ->
-                            val splitSec = ((kmMark / effectiveDistanceKm) * predictedTotalSec).roundToInt()
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text(
-                                    text = label,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f)
-                                )
-                                Text(
-                                    text = GaumePerfsCalculator.formatSecondsToMmSs(splitSec),
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                                )
-                            }
-                        }
-                    }
                 }
             }
         }
@@ -1692,7 +1604,7 @@ fun GaumeShareableFinisherCard(
                         fontWeight = FontWeight.ExtraBold
                     )
                     Text(
-                        text = "Générez et partagez votre fiche Finisher officielle avec tampon et bilan Pronostic",
+                        text = "Générez et partagez votre fiche Finisher avec tampon et bilan Pronostic",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -1832,7 +1744,7 @@ fun GaumeShareableFinisherCard(
                                         color = Color.White
                                     )
                                     Text(
-                                        text = "${selectedRaceItem.gaumeGeo.territoryName} • +${selectedRaceItem.race.elevationGainMeters} m D+",
+                                        text = "${selectedRaceItem.gaumeGeo.territoryName} • ${GaumePerfsCalculator.dPlusLabel(GaumePerfsCalculator.knownElevation(selectedRaceItem, selectedDistanceKm))}",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = Color(0xFFFFD166)
                                     )
@@ -2088,12 +2000,12 @@ fun GaumeSeasonCsvExportCard(
                         appendLine("=== BILAN CHALLENGE DES ALLURES LIBRES DE GAUME ${summary.seasonYear} ===")
                         appendLine("Coureur : ${summary.profile.displayName} (Challenge ${distanceSummary.distanceLabel} • Dossard #${distanceSummary.assignedBibNumber})")
                         appendLine("Score Top 15 : ${distanceSummary.totalChallengePoints} pts (${distanceSummary.countingRacesCount}/15 courses comptabilisées)")
-                        appendLine("Allure équivalente récente (plat) : ${pronosticsSummary.recentEquivalentFlatPaceFormatted}")
+                        appendLine("Allure moyenne récente (3 dernières courses) : ${pronosticsSummary.recentAveragePaceFormatted}")
                         appendLine()
                         appendLine("Manche;Village;Date;Distance_km;D+_m;Pronostic;Chrono_Reel;Ecart;Verdict;Points_ALG")
                         pronosticsSummary.completedWithVerdict.sortedBy { it.roundNumber }.forEach { e ->
                             appendLine(
-                                "#${e.roundNumber};${e.villageName};${e.dateIso};${"%.1f".format(e.distanceKm)};+${e.elevationGainMeters};${e.predictedTimeFormatted};${e.actualTimeFormatted ?: "-"};${e.deltaFormatted ?: "-"};${e.verdictLabel};${e.actualPoints ?: 0}"
+                                "#${e.roundNumber};${e.villageName};${e.dateIso};${"%.1f".format(e.distanceKm)};${e.elevationGainMeters?.let { "+$it" } ?: ""};${e.predictedTimeFormatted};${e.actualTimeFormatted ?: "-"};${e.deltaFormatted ?: "-"};${e.verdictLabel};${e.actualPoints ?: 0}"
                             )
                         }
                     }
@@ -2204,7 +2116,13 @@ fun shareFinisherCardAsPngAndText(
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.NORMAL)
         }
         canvas.drawText("Manche #${raceItem.race.roundNumber} (${raceItem.race.dateIso}) • ${raceItem.gaumeGeo.territoryName}", 112f, 495f, fiefPaint)
-        canvas.drawText("Parcours : ${raceItem.race.distanceKm} km  •  Dénivelé : +${raceItem.race.elevationGainMeters} m D+", 112f, 555f, fiefPaint)
+        val shareDistKm = if (result.distanceLabel == "5 km") 5 else 10
+        val shareKm = AlgChallengeCalculator.realKmOfResult(result, raceItem.race, shareDistKm)
+        val shareDPlus = AlgChallengeCalculator.knownElevationForRace(raceItem.race, raceItem.activityMetrics, shareDistKm)
+        canvas.drawText(
+            "Parcours : ${"%.1f".format(shareKm)} km" + (shareDPlus?.let { "  •  Dénivelé : +$it m D+" } ?: ""),
+            112f, 555f, fiefPaint
+        )
 
         val stampCenterX = width - 220f
         val stampCenterY = 460f
@@ -2230,7 +2148,7 @@ fun shareFinisherCardAsPngAndText(
             Triple("CHRONO OFFICIEL", result.officialTimeFormatted, "Challenge ${result.distanceLabel}"),
             Triple("ALLURE & VITESSE", result.pacePerKmFormatted, "${"%.2f".format(result.speedKmh)} km/h"),
             Triple("CLASSEMENT", "${result.overallRank}e / ${result.totalFinishers}", "Catégorie : ${result.categoryRank}e"),
-            Triple("POINTS CHALLENGE", "${result.challengePoints} pts", "Sur 1000 pts")
+            Triple("POINTS CHALLENGE", "${result.challengePoints} pts", "Sur 1200 pts")
         )
 
         metrics.forEachIndexed { idx, (mLabel, mVal, mSub) ->

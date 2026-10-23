@@ -176,7 +176,7 @@ fun SharedCalendarScreen(
                         seasonYear = seasonYear,
                         selectedDistanceKm = selectedDistanceKm,
                         racesWithContext = allRaces,
-                        defaultTargetPoints = simulatorSummary?.defaultSuggestedTargetPoints ?: 920,
+                        defaultTargetPoints = simulatorSummary?.defaultSuggestedTargetPoints ?: 0,
                         onOpenRaceDetail = onOpenRaceDetail,
                         onTogglePlannedForSimulator = onTogglePlannedSimulatorRace,
                         onQuickUpdateTerrain = onQuickUpdateTerrain
@@ -500,11 +500,14 @@ private fun SharedCalendarRaceCard(
 
                 Spacer(modifier = Modifier.width(6.dp))
 
-                TerrainAndWeatherMiniBadge(
-                    terrainCondition = tw?.terrainCondition ?: "Sec",
-                    weatherCondition = tw?.weatherCondition ?: "Nuageux",
-                    temperatureC = tw?.temperatureC
-                )
+                // Terrain et météo affichés seulement s'ils ont été saisis.
+                if (tw != null) {
+                    TerrainAndWeatherMiniBadge(
+                        terrainCondition = tw.terrainCondition,
+                        weatherCondition = tw.weatherCondition,
+                        temperatureC = tw.temperatureC
+                    )
+                }
             }
 
             if (item.resultsByProfileAndDistance.isNotEmpty()) {

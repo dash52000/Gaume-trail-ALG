@@ -1,9 +1,7 @@
 package com.example.ui.components
 
-import android.content.Intent
 import android.graphics.Paint
 import android.graphics.Typeface
-import android.net.Uri
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -102,7 +100,8 @@ private data class ProjectedMarkerHit(
 private const val GAUME_MIN_LAT = 49.485
 private const val GAUME_MAX_LAT = 49.835
 private const val GAUME_MIN_LON = 5.145
-private const val GAUME_MAX_LON = 5.865
+// Jusqu'à Beckerich (LU), lieu du semi-marathon du Challenge.
+private const val GAUME_MAX_LON = 5.925
 
 /**
  * Carte Interactive Native de Gaume (100% Jetpack Compose Canvas haute définition, zéro WebView vide) :
@@ -110,7 +109,7 @@ private const val GAUME_MAX_LON = 5.865
  * - Zoom pincé et boutons +/- (1.0x à 5.5x) + déplacement libre (pan)
  * - Fond Routier (E411, N83, N88, N4, N82 + Rivières Semois, Rulles, Ton, Vire, Chiers + Forêts)
  * - Fond Topographique (3 Cuestes Gaumaises, Massif d'Anlier, courbes de relief & grille GPS)
- * - Calque des 6 Fiefs de Gaume avec progression de conquête
+ * - Calque des fiefs de Gaume avec progression de conquête
  */
 @Composable
 fun GaumeRacesMapCard(
@@ -448,7 +447,7 @@ fun GaumeRacesMapCard(
                         // 3. Grille GPS & Courbes de relief des 3 Cuestes Gaumaises (si mode Topo ou en filigrane)
                         drawGaumeTopographyAndCuestes(::projectGps, isTopoLayer, zoomScale)
 
-                        // 4. Calque des 6 Fiefs / Territoires de Gaume
+                        // 4. Calque des fiefs (territoires du jeu)
                         if (showTerritoriesOverlay) {
                             drawGaumeTerritoriesOverlay(
                                 projectGps = ::projectGps,
@@ -474,7 +473,10 @@ fun GaumeRacesMapCard(
                         }
 
                         sortedForZOrder.forEach { item ->
-                            val pos = projectGps(item.gaumeGeo.latitude, item.gaumeGeo.longitude)
+                            // Manche sans position connue : pas de marqueur (aucune coordonnée inventée).
+                            val markerLat = item.gaumeGeo.latitude ?: return@forEach
+                            val markerLon = item.gaumeGeo.longitude ?: return@forEach
+                            val pos = projectGps(markerLat, markerLon)
                             hits.add(ProjectedMarkerHit(item.race.raceId, pos.x, pos.y))
 
                             val result = item.resultForDistance(selectedDistanceKm)
@@ -735,7 +737,9 @@ fun GaumeRacesMapCard(
                                 .clip(RoundedCornerShape(8.dp))
                                 .clickable {
                                     selectedRaceId = item.race.raceId
-                                    focusOnLatLon(item.gaumeGeo.latitude, item.gaumeGeo.longitude, targetZoom = 2.0f)
+                                    val la = item.gaumeGeo.latitude
+                                    val lo = item.gaumeGeo.longitude
+                                    if (la != null && lo != null) focusOnLatLon(la, lo, targetZoom = 2.0f)
                                 }
                         ) {
                             Row(
@@ -803,11 +807,15 @@ fun GaumeRacesMapCard(
                                     overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
-                                    text = "GPS exact : %.4f° N, %.4f° E • %s".format(
-                                        item.gaumeGeo.latitude,
-                                        item.gaumeGeo.longitude,
-                                        item.race.dateIso
-                                    ),
+                                    text = run {
+                                        val la = item.gaumeGeo.latitude
+                                        val lo = item.gaumeGeo.longitude
+                                        if (la != null && lo != null) {
+                                            "Départ : %.4f° N, %.4f° E • %s".format(la, lo, item.race.dateIso)
+                                        } else {
+                                            "Lieu non localisé • ${item.race.dateIso}"
+                                        }
+                                    },
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     maxLines = 1,
@@ -829,11 +837,11 @@ fun GaumeRacesMapCard(
                                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                                     )
                                 }
-                            } else {
+                            } else if (tw != null) {
                                 TerrainAndWeatherMiniBadge(
                                     terrainCondition = currentTerrain,
                                     weatherCondition = currentWeather,
-                                    temperatureC = tw?.temperatureC
+                                    temperatureC = tw.temperatureC
                                 )
                             }
                         }
@@ -890,13 +898,11 @@ fun GaumeRacesMapCard(
                         ) {
                             OutlinedButton(
                                 onClick = {
-                                    runCatching {
-                                        val geoUri = Uri.parse(
-                                            "geo:${item.gaumeGeo.latitude},${item.gaumeGeo.longitude}?q=${item.gaumeGeo.latitude},${item.gaumeGeo.longitude}(${Uri.encode("${item.gaumeGeo.canonicalVillage} - ${item.race.title}")})"
-                                        )
-                                        context.startActivity(Intent(Intent.ACTION_VIEW, geoUri))
-                                    }
+                                    val la = item.gaumeGeo.latitude
+                                    val lo = item.gaumeGeo.longitude
+                                    if (la != null && lo != null) openDirectionsTo(context, la, lo)
                                 },
+                                enabled = item.gaumeGeo.hasKnownLocation,
                                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
                                 modifier = Modifier
                                     .weight(1f)

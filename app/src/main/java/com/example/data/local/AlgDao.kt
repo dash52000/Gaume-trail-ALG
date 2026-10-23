@@ -121,4 +121,13 @@ interface AlgDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertDirectoryEntries(entries: List<MyChronoDirectoryEntry>)
+
+    @Query("SELECT * FROM challenge_standings WHERE seasonYear >= 2026")
+    fun observeAllStandings(): Flow<List<ChallengeStandingEntity>>
+
+    @Query("DELETE FROM challenge_standings WHERE seasonYear = :seasonYear")
+    suspend fun deleteStandingsBySeason(seasonYear: Int)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertStandings(standings: List<ChallengeStandingEntity>)
 }

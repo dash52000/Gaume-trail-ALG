@@ -1,6 +1,5 @@
 package com.example.ui.screens
 
-import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -77,7 +76,9 @@ import com.example.domain.RunnerChallengeSummary
 import com.example.ui.components.GaumeGpsAndElevationCanvas
 import com.example.ui.components.GaumePerfsCalculator
 import com.example.ui.components.GaumeRacePronosticEntry
+import com.example.ui.components.RacePracticalInfoCard
 import com.example.ui.components.RacePronosticVsActualMiniBanner
+import com.example.ui.components.openDirectionsTo
 import com.example.ui.components.Top15StatusBadge
 import com.example.ui.theme.ClayTerracotta
 import com.example.ui.theme.CountingTop15BadgeGreen
@@ -151,7 +152,7 @@ fun RaceDetailModalScreen(
         mutableStateOf(tw?.weatherCondition ?: "Nuageux")
     }
     var temperatureInput by remember(activeProfileId, tw) {
-        mutableStateOf((tw?.temperatureC ?: 14).toString())
+        mutableStateOf(tw?.temperatureC?.toString().orEmpty())
     }
     var terrainNotes by remember(activeProfileId, tw) {
         mutableStateOf(tw?.terrainNotes.orEmpty())
@@ -159,8 +160,11 @@ fun RaceDetailModalScreen(
     var isPlannedSimulator by remember(activeProfileId, tw) {
         mutableStateOf(tw?.isPlannedForSimulator == true)
     }
-    var simulatedTargetPointsInput by remember(activeProfileId, tw) {
-        mutableStateOf((tw?.simulatedTargetPoints ?: 920).toString())
+    // Objectif par défaut du simulateur : ta moyenne réelle de points sur cette distance (0 sans historique).
+    val averagePointsForDistance = trioSummaries[activeProfileId]
+        ?.challengeForDistance(distanceKm)?.averagePointsPerRace ?: 0
+    var simulatedTargetPointsInput by remember(activeProfileId, tw, averagePointsForDistance) {
+        mutableStateOf((tw?.simulatedTargetPoints ?: averagePointsForDistance).toString())
     }
 
     // Accordéons repliables : fermés par défaut si la course a déjà un résultat officiel
@@ -214,13 +218,11 @@ fun RaceDetailModalScreen(
                 actions = {
                     IconButton(
                         onClick = {
-                            runCatching {
-                                val geoUri = Uri.parse(
-                                    "geo:${raceItem.gaumeGeo.latitude},${raceItem.gaumeGeo.longitude}?q=${raceItem.gaumeGeo.latitude},${raceItem.gaumeGeo.longitude}(${Uri.encode("${raceItem.gaumeGeo.canonicalVillage} - ${race.title}")})"
-                                )
-                                context.startActivity(Intent(Intent.ACTION_VIEW, geoUri))
-                            }
+                            val la = raceItem.gaumeGeo.latitude
+                            val lo = raceItem.gaumeGeo.longitude
+                            if (la != null && lo != null) openDirectionsTo(context, la, lo)
                         },
+                        enabled = raceItem.gaumeGeo.hasKnownLocation,
                         modifier = Modifier.testTag("race_detail_gps_button")
                     ) {
                         Icon(
@@ -334,6 +336,12 @@ fun RaceDetailModalScreen(
                 onExpandBibSearch = { showBibAccordion = true }
             )
 
+            // 2 bis. FICHE PRATIQUE (adresse, horaires, terrain, équipements, tracés, itinéraire)
+            RacePracticalInfoCard(
+                race = race,
+                geo = raceItem.gaumeGeo
+            )
+
             // 3. BANDEAU FIEF DE GAUME & MÉTÉO RÉSUMÉE
             Surface(
                 shape = RoundedCornerShape(14.dp),
@@ -380,7 +388,11 @@ fun RaceDetailModalScreen(
                                 overflow = TextOverflow.Ellipsis
                             )
                             Text(
-                                text = "Fief : ${raceItem.gaumeGeo.territoryName} • Terrain : $terrainCondition • $weatherCondition (${temperatureInput}°C)",
+                                text = "Fief : ${raceItem.gaumeGeo.territoryName} • " + if (tw != null) {
+                                    "Terrain : $terrainCondition • $weatherCondition" + (tw.temperatureC?.let { " ($it°C)" } ?: "")
+                                } else {
+                                    "Terrain et météo non renseignés"
+                                },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1,
@@ -733,7 +745,7 @@ fun RaceDetailModalScreen(
                                     if (isPlannedSimulator) {
                                         Spacer(modifier = Modifier.width(6.dp))
                                         Text(
-                                            text = "${simulatedTargetPointsInput.toIntOrNull() ?: 920} pts",
+                                            text = "${simulatedTargetPointsInput.toIntOrNull() ?: averagePointsForDistance} pts",
                                             style = MaterialTheme.typography.labelMedium,
                                             fontWeight = FontWeight.ExtraBold,
                                             color = CountingTop15BadgeGreen
@@ -752,7 +764,7 @@ fun RaceDetailModalScreen(
                                         terrainNotes,
                                         isPlannedSimulator,
                                         distanceKm,
-                                        simulatedTargetPointsInput.toIntOrNull() ?: 920
+                                        simulatedTargetPointsInput.toIntOrNull() ?: averagePointsForDistance
                                     )
                                     showTerrainAccordion = false
                                 },
@@ -823,7 +835,7 @@ private fun OfficialMyChronoResultCard(
                         text = if (result != null) {
                             "$runnerName • ${result.distanceLabel} • Dossard #${result.bibNumber}"
                         } else if (pronosticEntry != null) {
-                            "$runnerName • Basé sur tes dernières courses (${pronosticEntry.recentEquivalentFlatPaceFormatted} équiv. plat)"
+                            "$runnerName • Basé sur tes 3 dernières courses (${pronosticEntry.recentAveragePaceFormatted})"
                         } else {
                             "$runnerName • Aucun résultat $distanceKm km enregistré"
                         },
@@ -1165,7 +1177,7 @@ private fun WatchAndGpsSection(
                     WatchMetricChip(
                         icon = Icons.Default.Speed,
                         label = "Cadence Moy.",
-                        value = "${metrics.cadenceSpm ?: 174} spm",
+                        value = metrics.cadenceSpm?.let { "$it spm" } ?: "Non mesurée",
                         tint = SemoisRiverTeal,
                         modifier = Modifier.weight(1f)
                     )

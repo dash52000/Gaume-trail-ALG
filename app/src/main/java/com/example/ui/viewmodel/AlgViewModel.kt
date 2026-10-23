@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.data.local.ActivityMetricsEntity
+import com.example.data.local.ChallengeStandingEntity
 import com.example.data.local.MyChronoDirectoryEntry
 import com.example.data.local.RaceBibOverrideEntity
 import com.example.data.local.RaceEntity
@@ -14,6 +15,8 @@ import com.example.data.local.RaceTerrainWeatherEntity
 import com.example.data.local.RunnerProfileEntity
 import com.example.data.repository.AlgRepository
 import com.example.domain.AlgChallengeCalculator
+import com.example.domain.ChallengeStandingsCalculator
+import com.example.domain.ProfileChallengeStanding
 import com.example.domain.RunnerChallengeSummary
 import com.example.domain.SameCourseYearComparison
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -61,7 +64,9 @@ data class AlgUiState(
     val terrainWeatherByRaceAndProfile: Map<String, Map<String, RaceTerrainWeatherEntity>> = emptyMap(),
     val directorySearchResults: List<MyChronoDirectoryEntry> = emptyList(),
     val directorySearchQuery: String = "",
-    val statusBannerMessage: String? = null
+    val statusBannerMessage: String? = null,
+    /** Classement provisoire du Challenge : profileId → (distance 10 ou 5 → classement). */
+    val trioStandings: Map<String, Map<Int, ProfileChallengeStanding>> = emptyMap()
 )
 
 private data class ControlState(
@@ -86,7 +91,8 @@ private data class DataFlowsBundle(
     val allOverrides: List<RaceBibOverrideEntity>,
     val allMetrics: List<ActivityMetricsEntity>,
     val allTerrainWeather: List<RaceTerrainWeatherEntity>,
-    val directory: List<MyChronoDirectoryEntry>
+    val directory: List<MyChronoDirectoryEntry>,
+    val standings: List<ChallengeStandingEntity> = emptyList()
 )
 
 class AlgViewModel(
@@ -107,8 +113,9 @@ class AlgViewModel(
             repository.allBibOverridesFlow,
             repository.allActivityMetricsFlow,
             repository.allTerrainWeatherFlow,
-            repository.directoryFlow
-        ) { overrides, metrics, terrainWeather, directory ->
+            repository.directoryFlow,
+            repository.standingsFlow
+        ) { overrides, metrics, terrainWeather, directory, standings ->
             DataFlowsBundle(
                 profiles = emptyList(),
                 allRaces = emptyList(),
@@ -116,7 +123,8 @@ class AlgViewModel(
                 allOverrides = overrides,
                 allMetrics = metrics,
                 allTerrainWeather = terrainWeather,
-                directory = directory
+                directory = directory,
+                standings = standings
             )
         }
     ) { (profiles, races, results), partial ->
@@ -170,6 +178,17 @@ class AlgViewModel(
         }
 
         val activeSummary = activeProfile?.let { trioSummaries[it.profileId] }
+
+        val trioStandings = profiles.associate { profile ->
+            profile.profileId to listOf(10, 5).mapNotNull { dist ->
+                ChallengeStandingsCalculator.standingForProfile(
+                    profile = profile,
+                    seasonYear = activeSeasonYear,
+                    distanceKm = dist,
+                    allStandings = bundle.standings
+                )?.let { dist to it }
+            }.toMap()
+        }
 
         val multiSeasonSummaries = if (activeProfile != null) {
             availableSeasons.associateWith { year ->
@@ -255,7 +274,8 @@ class AlgViewModel(
             terrainWeatherByRaceAndProfile = terrainWeatherByRaceAndProfile,
             directorySearchResults = filteredDirectory,
             directorySearchQuery = ctrl.directorySearchQuery,
-            statusBannerMessage = ctrl.statusBannerMessage
+            statusBannerMessage = ctrl.statusBannerMessage,
+            trioStandings = trioStandings
         )
     }.stateIn(
         scope = viewModelScope,
@@ -375,7 +395,7 @@ class AlgViewModel(
             )
             val result = repository.resetAndResyncCleanResults(targetYear)
             val msg = result.fold(
-                onSuccess = { "Données nettoyées (0 donnée fictive) • $it" },
+                onSuccess = { "Résultats re-synchronisés • $it" },
                 onFailure = { "Données nettoyées • ${it.message}" }
             )
             controlFlow.value = controlFlow.value.copy(
@@ -482,7 +502,7 @@ class AlgViewModel(
                 terrainCondition = terrainCondition,
                 isPlannedForSimulator = isPlannedForSimulator,
                 plannedDistanceKm = plannedDistanceKm,
-                simulatedTargetPoints = simulatedTargetPoints ?: 920,
+                simulatedTargetPoints = simulatedTargetPoints,
                 runnerNotes = terrainNotes
             )
             controlFlow.value = controlFlow.value.copy(
@@ -535,7 +555,10 @@ class AlgViewModel(
         viewModelScope.launch {
             val res = repository.importGpxTrackForRace(context, raceId, profileId, uri)
             val msg = res.fold(
-                onSuccess = { "Trace GPX « ${it.sourceTitle} » importée (${it.recordedDistanceKm} km, +${it.elevationGainMeters} m)" },
+                onSuccess = {
+                    val dPlus = it.elevationGainMeters?.let { d -> ", +$d m" } ?: ", sans altitude"
+                    "Trace GPX « ${it.sourceTitle} » importée (${it.recordedDistanceKm} km$dPlus)"
+                },
                 onFailure = { it.message ?: "Erreur lecture GPX" }
             )
             controlFlow.value = controlFlow.value.copy(statusBannerMessage = msg)
