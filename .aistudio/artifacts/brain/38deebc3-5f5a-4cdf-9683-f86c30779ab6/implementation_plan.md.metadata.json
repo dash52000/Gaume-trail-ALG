@@ -1,0 +1,6 @@
+{
+  "summary":  "Plan pour afficher les pronostics uniquement sur les prochaines manches à venir (non encore courues) et les calculer exclusivement à partir de l'historique récent (les 3 dernières courses courues).",
+  "updatedAt":  "2026-10-21T12:04:04.331534060Z",
+  "requestFeedback":  true,
+  "userFacing":  true
+}

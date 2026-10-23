@@ -1,0 +1,12 @@
+<resources>
+    <string name="app_name">Gaume Trail ALG</string>
+    <string name="subtitle_gaume">Challenge des Allures Libres de Gaume</string>
+    <string name="nav_runner_dashboard">Profil</string>
+    <string name="nav_shared_calendar">Trio &amp; Calendrier</string>
+    <string name="nav_progression">Saisons &amp; Duel</string>
+    <string name="nav_settings">Réglages</string>
+    <string name="action_sync_mychrono">Actualiser MyChrono</string>
+    <string name="challenge_top15_title">Estimation Challenge ALG (15 meilleures courses)</string>
+    <string name="terroir_badge_orval">Calice d\'Orval</string>
+    <string name="terroir_badge_rulles">Chope de La Rulles</string>
+</resources>
