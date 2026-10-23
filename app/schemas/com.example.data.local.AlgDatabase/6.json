@@ -1,0 +1,492 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 6,
+    "identityHash": "940b079b98e8b3c3753c62d7aa613698",
+    "entities": [
+      {
+        "tableName": "runner_profiles",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`profileId` TEXT NOT NULL, `displayName` TEXT NOT NULL, `myChronoRunnerId` TEXT NOT NULL, `defaultBib10km` TEXT NOT NULL, `defaultBib5km` TEXT NOT NULL, `preferredDistanceKm` INTEGER NOT NULL, `categoryLabel` TEXT NOT NULL, `clubName` TEXT NOT NULL, `avatarColorHex` INTEGER NOT NULL, `lastSyncedEpochMillis` INTEGER, PRIMARY KEY(`profileId`))",
+        "fields": [
+          {
+            "fieldPath": "profileId",
+            "columnName": "profileId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "displayName",
+            "columnName": "displayName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "myChronoRunnerId",
+            "columnName": "myChronoRunnerId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "defaultBib10km",
+            "columnName": "defaultBib10km",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "defaultBib5km",
+            "columnName": "defaultBib5km",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "preferredDistanceKm",
+            "columnName": "preferredDistanceKm",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "categoryLabel",
+            "columnName": "categoryLabel",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "clubName",
+            "columnName": "clubName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "avatarColorHex",
+            "columnName": "avatarColorHex",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastSyncedEpochMillis",
+            "columnName": "lastSyncedEpochMillis",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "profileId"
+          ]
+        }
+      },
+      {
+        "tableName": "races",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`raceId` TEXT NOT NULL, `seasonYear` INTEGER NOT NULL, `roundNumber` INTEGER NOT NULL, `myChronoEventId` TEXT NOT NULL, `title` TEXT NOT NULL, `village` TEXT NOT NULL, `dateIso` TEXT NOT NULL, `distanceKm` REAL NOT NULL, `elevationGainMeters` INTEGER NOT NULL, `isCompleted` INTEGER NOT NULL, `isSeasonFinale` INTEGER NOT NULL, PRIMARY KEY(`raceId`))",
+        "fields": [
+          {
+            "fieldPath": "raceId",
+            "columnName": "raceId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "seasonYear",
+            "columnName": "seasonYear",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "roundNumber",
+            "columnName": "roundNumber",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "myChronoEventId",
+            "columnName": "myChronoEventId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "village",
+            "columnName": "village",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "dateIso",
+            "columnName": "dateIso",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "distanceKm",
+            "columnName": "distanceKm",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "elevationGainMeters",
+            "columnName": "elevationGainMeters",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isCompleted",
+            "columnName": "isCompleted",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isSeasonFinale",
+            "columnName": "isSeasonFinale",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "raceId"
+          ]
+        }
+      },
+      {
+        "tableName": "race_results",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`raceId` TEXT NOT NULL, `profileId` TEXT NOT NULL, `seasonYear` INTEGER NOT NULL, `bibNumber` TEXT NOT NULL, `distanceLabel` TEXT NOT NULL, `officialTimeSeconds` INTEGER NOT NULL, `officialTimeFormatted` TEXT NOT NULL, `pacePerKmFormatted` TEXT NOT NULL, `speedKmh` REAL NOT NULL, `overallRank` INTEGER NOT NULL, `totalFinishers` INTEGER NOT NULL, `categoryRank` INTEGER NOT NULL, `categoryTotal` INTEGER NOT NULL, `challengePoints` INTEGER NOT NULL, PRIMARY KEY(`raceId`, `profileId`, `distanceLabel`))",
+        "fields": [
+          {
+            "fieldPath": "raceId",
+            "columnName": "raceId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "profileId",
+            "columnName": "profileId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "seasonYear",
+            "columnName": "seasonYear",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "bibNumber",
+            "columnName": "bibNumber",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "distanceLabel",
+            "columnName": "distanceLabel",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "officialTimeSeconds",
+            "columnName": "officialTimeSeconds",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "officialTimeFormatted",
+            "columnName": "officialTimeFormatted",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "pacePerKmFormatted",
+            "columnName": "pacePerKmFormatted",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "speedKmh",
+            "columnName": "speedKmh",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "overallRank",
+            "columnName": "overallRank",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "totalFinishers",
+            "columnName": "totalFinishers",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "categoryRank",
+            "columnName": "categoryRank",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "categoryTotal",
+            "columnName": "categoryTotal",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "challengePoints",
+            "columnName": "challengePoints",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "raceId",
+            "profileId",
+            "distanceLabel"
+          ]
+        }
+      },
+      {
+        "tableName": "race_bib_overrides",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`raceId` TEXT NOT NULL, `profileId` TEXT NOT NULL, `bibNumber` TEXT NOT NULL, `distanceKm` INTEGER NOT NULL, PRIMARY KEY(`raceId`, `profileId`))",
+        "fields": [
+          {
+            "fieldPath": "raceId",
+            "columnName": "raceId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "profileId",
+            "columnName": "profileId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "bibNumber",
+            "columnName": "bibNumber",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "distanceKm",
+            "columnName": "distanceKm",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "raceId",
+            "profileId"
+          ]
+        }
+      },
+      {
+        "tableName": "activity_metrics",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`raceId` TEXT NOT NULL, `profileId` TEXT NOT NULL, `sourceType` TEXT NOT NULL, `sourceTitle` TEXT NOT NULL, `recordedDistanceKm` REAL NOT NULL, `elevationGainMeters` INTEGER NOT NULL, `avgHeartRateBpm` INTEGER, `maxHeartRateBpm` INTEGER, `cadenceSpm` INTEGER, `serializedTrackPoints` TEXT NOT NULL, PRIMARY KEY(`raceId`, `profileId`))",
+        "fields": [
+          {
+            "fieldPath": "raceId",
+            "columnName": "raceId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "profileId",
+            "columnName": "profileId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceType",
+            "columnName": "sourceType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceTitle",
+            "columnName": "sourceTitle",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "recordedDistanceKm",
+            "columnName": "recordedDistanceKm",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "elevationGainMeters",
+            "columnName": "elevationGainMeters",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "avgHeartRateBpm",
+            "columnName": "avgHeartRateBpm",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "maxHeartRateBpm",
+            "columnName": "maxHeartRateBpm",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "cadenceSpm",
+            "columnName": "cadenceSpm",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "serializedTrackPoints",
+            "columnName": "serializedTrackPoints",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "raceId",
+            "profileId"
+          ]
+        }
+      },
+      {
+        "tableName": "race_terrain_weather",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`raceId` TEXT NOT NULL, `profileId` TEXT NOT NULL, `terrainCondition` TEXT NOT NULL, `weatherCondition` TEXT NOT NULL, `temperatureC` INTEGER, `terrainNotes` TEXT NOT NULL, `isPlannedForSimulator` INTEGER NOT NULL, `plannedDistanceKm` INTEGER NOT NULL, `simulatedTargetPoints` INTEGER, PRIMARY KEY(`raceId`, `profileId`))",
+        "fields": [
+          {
+            "fieldPath": "raceId",
+            "columnName": "raceId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "profileId",
+            "columnName": "profileId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "terrainCondition",
+            "columnName": "terrainCondition",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "weatherCondition",
+            "columnName": "weatherCondition",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "temperatureC",
+            "columnName": "temperatureC",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "terrainNotes",
+            "columnName": "terrainNotes",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isPlannedForSimulator",
+            "columnName": "isPlannedForSimulator",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "plannedDistanceKm",
+            "columnName": "plannedDistanceKm",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "simulatedTargetPoints",
+            "columnName": "simulatedTargetPoints",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "raceId",
+            "profileId"
+          ]
+        }
+      },
+      {
+        "tableName": "mychrono_directory",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`myChronoRunnerId` TEXT NOT NULL, `fullName` TEXT NOT NULL, `defaultBib10km` TEXT NOT NULL, `defaultBib5km` TEXT NOT NULL, `club` TEXT NOT NULL, `category` TEXT NOT NULL, `sampleRaceCount` INTEGER NOT NULL, `bestPoints` INTEGER NOT NULL, PRIMARY KEY(`myChronoRunnerId`))",
+        "fields": [
+          {
+            "fieldPath": "myChronoRunnerId",
+            "columnName": "myChronoRunnerId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "fullName",
+            "columnName": "fullName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "defaultBib10km",
+            "columnName": "defaultBib10km",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "defaultBib5km",
+            "columnName": "defaultBib5km",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "club",
+            "columnName": "club",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "category",
+            "columnName": "category",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sampleRaceCount",
+            "columnName": "sampleRaceCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "bestPoints",
+            "columnName": "bestPoints",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "myChronoRunnerId"
+          ]
+        }
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '940b079b98e8b3c3753c62d7aa613698')"
+    ]
+  }
+}
