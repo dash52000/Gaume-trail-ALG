@@ -80,6 +80,9 @@ secrets {
 
 googleServices { missingGoogleServicesStrategy = MissingGoogleServicesStrategy.WARN }
 
+// Room enregistre le schéma de chaque version de la base, nécessaire pour migrer sans perte.
+ksp { arg("room.schemaLocation", "$projectDir/schemas") }
+
 // Some unused dependencies are commented out below instead of being removed.
 // This makes it easy to add them back in the future if needed.
 dependencies {

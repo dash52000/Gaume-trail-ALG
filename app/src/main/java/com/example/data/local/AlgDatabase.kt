@@ -16,7 +16,11 @@ import androidx.room.RoomDatabase
         MyChronoDirectoryEntry::class
     ],
     version = 6,
-    exportSchema = false
+    // Le schéma de chaque version est enregistré dans app/schemas (commité par le build GitHub).
+    // Pour une future version 7 : passer version = 7 et ajouter
+    //   autoMigrations = [AutoMigration(from = 6, to = 7)]
+    // afin que les données saisies (dossards, résultats, profils) soient conservées.
+    exportSchema = true
 )
 abstract class AlgDatabase : RoomDatabase() {
     abstract fun algDao(): AlgDao
@@ -32,7 +36,11 @@ abstract class AlgDatabase : RoomDatabase() {
                     AlgDatabase::class.java,
                     "gaume_trail_alg_2026_v6.db"
                 )
-                    .fallbackToDestructiveMigration(true)
+                    // Plus d'effacement automatique lors d'une mise à jour : une montée de version
+                    // sans migration bloque l'appli au lieu de vider la base (les données restent
+                    // intactes, il suffit d'ajouter la migration). Seul un retour à une version
+                    // plus ancienne repart de zéro.
+                    .fallbackToDestructiveMigrationOnDowngrade(true)
                     .build()
                     .also { INSTANCE = it }
             }

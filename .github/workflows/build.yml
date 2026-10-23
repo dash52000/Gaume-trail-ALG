@@ -40,6 +40,17 @@ jobs:
           tail -n 40 build.log | esc | { read -r t; echo "::warning title=Fin du log::$t"; }
           exit 0
 
+      # Garde le schéma de la base dans le repo pour pouvoir migrer sans perte plus tard.
+      - name: Sauver le schéma de la base
+        run: |
+          if [ -n "$(git status --porcelain app/schemas)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add app/schemas
+            git commit -m "Schéma de la base exporté par le build"
+            git push
+          fi
+
       - name: Préparer l'APK
         run: cp app/build/outputs/apk/debug/app-debug.apk gaume-trail-alg.apk
 
