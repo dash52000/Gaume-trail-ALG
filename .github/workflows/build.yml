@@ -41,6 +41,8 @@ jobs:
               failed += int(r.get('failures', 0)) + int(r.get('errors', 0))
           print(f"::notice title=Tests unitaires::{total} tests, {failed} échec(s), {skipped} ignoré(s)")
           EOF
+          ctx=$(grep -n -B4 -A2 "getApplication" build.log 2>/dev/null | head -20 | sed -e 's/%/%25/g' | sed -e ':a;N;$!ba;s/\n/%0A/g')
+          if [ -n "$ctx" ]; then echo "::notice title=Contexte KSP::$ctx"; fi
 
       # En cas d'échec, remonte les erreurs (compilation et tests) comme annotations lisibles sur le commit.
       - name: Résumer les erreurs
