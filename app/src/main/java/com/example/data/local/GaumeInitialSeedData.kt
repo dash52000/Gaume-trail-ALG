@@ -363,7 +363,12 @@ object GaumeInitialSeedData {
      * Position et territoire d'une manche :
      * coordonnées du départ MyChrono, sinon centre du village connu, sinon inconnues.
      */
-    fun resolveGaumeGeoForRace(race: RaceEntity): GaumeVillageGeo {
+    private val geoCache = java.util.concurrent.ConcurrentHashMap<Triple<String, Double?, Double?>, GaumeVillageGeo>()
+
+    fun resolveGaumeGeoForRace(race: RaceEntity): GaumeVillageGeo =
+        geoCache.getOrPut(Triple(race.village, race.startLatitude, race.startLongitude)) { computeGeo(race) }
+
+    private fun computeGeo(race: RaceEntity): GaumeVillageGeo {
         val known = findKnownVillage(race.village)
         val lat = race.startLatitude ?: known?.lat
         val lon = race.startLongitude ?: known?.lon
