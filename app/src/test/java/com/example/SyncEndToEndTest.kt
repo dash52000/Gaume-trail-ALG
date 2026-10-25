@@ -39,7 +39,11 @@ class SyncEndToEndTest {
 
     private lateinit var db: AlgDatabase
     /** Appels à MyChrono (la météo n'est pas comptée). */
-    var calls = 0
+    private val callCounter = java.util.concurrent.atomic.AtomicInteger(0)
+    /** Lecture et remise à zéro du compteur (les courses sont téléchargées en parallèle). */
+    var calls: Int
+        get() = callCounter.get()
+        set(v) = callCounter.set(v)
 
     private val calendar2026 = """
         {"races":[
@@ -102,7 +106,7 @@ class SyncEndToEndTest {
 
     private val http = OkHttpClient.Builder().addInterceptor { chain ->
         val url = chain.request().url.toString()
-        if (url.contains("mychrono")) calls++
+        if (url.contains("mychrono")) callCounter.incrementAndGet()
         val body = when {
             url.contains("races?year=2026") -> calendar2026
             url.contains("races?year=") -> """{"races":[]}"""
