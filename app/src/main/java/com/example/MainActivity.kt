@@ -72,7 +72,11 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
 
         val database = AlgDatabase.getInstance(applicationContext)
-        val repository = AlgRepository(database.algDao(), database = database)
+        val repository = AlgRepository(
+            database.algDao(),
+            database = database,
+            syncPrefs = applicationContext.getSharedPreferences("mychrono_sync", MODE_PRIVATE)
+        )
         algViewModel = ViewModelProvider(
             this,
             AlgViewModel.Factory(repository)

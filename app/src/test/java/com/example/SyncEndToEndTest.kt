@@ -1,6 +1,7 @@
 package com.example
 
 import android.content.Context
+import android.content.SharedPreferences
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.local.AlgDatabase
@@ -124,12 +125,13 @@ class SyncEndToEndTest {
     @After
     fun tearDown() = db.close()
 
-    private fun repository() = AlgRepository(
+    private fun repository(prefs: SharedPreferences? = null) = AlgRepository(
         algDao = db.algDao(),
         myChronoApiClient = MyChronoApiClient(http),
         openMeteoClient = OpenMeteoClient(http),
         today = { LocalDate.of(2026, 10, 25) },
-        database = db
+        database = db,
+        syncPrefs = prefs
     )
 
     @Test
@@ -193,6 +195,27 @@ class SyncEndToEndTest {
         assertTrue(dao.getAllStandingsSnapshot().any { it.distanceLabel == "5 km" && it.myChronoRunnerId == "1171" })
         val report = repo.diagnosticsFlow.value.profiles.single { it.profileId == "me" }
         assertEquals(1, report.onRunnerPageBySeason?.get(2026)?.get("5 km"))
+    }
+
+    /** Après la mise à jour de l'appli, tous les classements gardés sont retéléchargés une seule fois. */
+    @Test
+    fun appUpdate_refetchesEveryPublishedRaceOnce() = runBlocking {
+        val dao = db.algDao()
+        dao.upsertRunnerProfiles(GaumeInitialSeedData.buildInitialProfiles())
+        repository().syncAll() // ancienne version
+        Thread.sleep(5) // classements gardés strictement avant la mise à jour
+
+        val prefs = ApplicationProvider.getApplicationContext<Context>()
+            .getSharedPreferences("test_sync_${System.nanoTime()}", Context.MODE_PRIVATE)
+        calls = 0
+        val message = repository(prefs).syncAll().getOrThrow()
+        assertEquals(3 + 2 + 3, calls) // calendriers + Sommethonne et Virton + fiches coureur
+        assertTrue(message, message.contains("2 classement(s) retéléchargé(s) (mise à jour)"))
+        assertEquals(AlgRepository.CACHE_FORMAT, prefs.getInt("cache_format", 0))
+
+        calls = 0
+        repository(prefs).syncAll()
+        assertEquals(3 + 1 + 3, calls) // retour au fonctionnement normal
     }
 
     /** Classement publié sans la ligne de Damien, alors que sa fiche a la course : résultat repris de la fiche. */

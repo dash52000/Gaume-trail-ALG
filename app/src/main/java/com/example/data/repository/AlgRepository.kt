@@ -2,6 +2,7 @@ package com.example.data.repository
 
 import android.content.Context
 import android.net.Uri
+import android.content.SharedPreferences
 import com.example.data.local.ActivityMetricsEntity
 import androidx.room.withTransaction
 import com.example.data.local.AlgDao
@@ -68,7 +69,9 @@ class AlgRepository(
     private val today: () -> LocalDate = { LocalDate.now() },
     /** Pour regrouper les écritures (l'écran ne voit jamais une saison à moitié recalculée). */
     private val database: AlgDatabase? = null,
-    private val wikipediaClient: WikipediaClient = WikipediaClient()
+    private val wikipediaClient: WikipediaClient = WikipediaClient(),
+    /** Mémorise la version des classements gardés sur le téléphone (null : pas de retéléchargement forcé). */
+    private val syncPrefs: SharedPreferences? = null
 ) {
     companion object {
         /** Première saison publiée par MyChrono pour le Challenge des Allures Libres de Gaume. */
@@ -85,6 +88,18 @@ class AlgRepository(
          * hors de la plage des lignes téléchargées, et une seule par coureur et par distance.
          */
         const val RUNNER_PAGE_ROW_INDEX = 1_000_000
+
+        /**
+         * Version des classements gardés sur le téléphone. L'augmenter fait tout retélécharger une fois après
+         * la mise à jour de l'appli (2 : classements gardés avant la contre-vérification par la fiche coureur).
+         */
+        const val CACHE_FORMAT = 2
+        private const val PREF_CACHE_FORMAT = "cache_format"
+        private const val PREF_CACHE_FORMAT_SINCE = "cache_format_since"
+
+        /** Une course close gardée depuis plus longtemps est retéléchargée, quelques-unes à chaque synchro. */
+        private const val STALE_AFTER_DAYS = 45L
+        private const val MAX_STALE_REFRESH_PER_SYNC = 6
     }
 
     private val recomputeMutex = Mutex()
@@ -243,9 +258,10 @@ class AlgRepository(
 
     /**
      * Synchronise toutes les saisons depuis l'API publique MyChrono :
-     * calendriers (1 appel par saison), puis résultats des seules courses nouvelles ou récentes
-     * (une course close depuis plus de 3 semaines est gardée sur le téléphone), puis recalcul local
-     * des résultats du Trio, du classement provisoire et des indices de parcours, et enfin la météo.
+     * calendriers (1 appel par saison), puis résultats des courses nouvelles ou récentes (une course close
+     * depuis plus de 3 semaines est gardée sur le téléphone, et rafraîchie de temps en temps), contrôle par
+     * la fiche coureur de chaque profil, puis recalcul local des résultats du Trio, du classement provisoire
+     * et des indices de parcours, et enfin la météo.
      */
     suspend fun syncAll(force: Boolean = false): Result<String> = withContext(Dispatchers.IO) {
         val now = today()
@@ -269,9 +285,25 @@ class AlgRepository(
 
         val allRaces = algDao.getAllRacesSnapshot()
         val states = algDao.getFetchStates().associateBy { it.raceId }
-        val toFetch = allRaces.filter { needsFetch(it, states[it.raceId], now, force) }
+        // Après une mise à jour qui change la façon de lire les classements : chaque classement gardé est
+        // retéléchargé une fois (une course en échec est réessayée seule, sans tout relancer).
+        val formatSince = cacheFormatSince()
+        fun outdated(race: RaceEntity): Boolean =
+            hasPublishedResults(race, now) && (states[race.raceId]?.fetchedAtEpochMillis ?: Long.MAX_VALUE) < formatSince
+        val due = allRaces.filter { needsFetch(it, states[it.raceId], now, force) || outdated(it) }
+        // Classements gardés depuis longtemps : quelques-uns sont rafraîchis à chaque synchro (corrections,
+        // fiches fusionnées chez MyChrono), les plus anciens d'abord.
+        val staleBefore = System.currentTimeMillis() - STALE_AFTER_DAYS * 24 * 3600 * 1000
+        val stale = allRaces
+            .filter { it !in due && hasPublishedResults(it, now) }
+            .mapNotNull { r -> states[r.raceId]?.takeIf { it.fetchedAtEpochMillis < staleBefore }?.let { r to it } }
+            .sortedBy { it.second.fetchedAtEpochMillis }
+            .take(MAX_STALE_REFRESH_PER_SYNC)
+            .map { it.first }
+        val toFetch = due + stale
         val fetched = myChronoApiClient.fetchManyRaceResults(toFetch)
         val raceById = allRaces.associateBy { it.raceId }
+        val refreshedForUpdate = fetched.keys.count { id -> raceById[id]?.let { outdated(it) } == true }
         fetched.forEach { (raceId, rows) -> raceById[raceId]?.let { storeRows(it, rows) } }
 
         val repairs = repairRunnerIds() + runCatching { crossCheckWithRunnerPages() }.getOrDefault(emptyList())
@@ -290,6 +322,7 @@ class AlgRepository(
                 val hc = current.count { !it.isChallenge }
                 if (hc > 0) append(" + $hc hors challenge")
                 append(" • ")
+                if (!force && refreshedForUpdate > 0) append("$refreshedForUpdate classement(s) retéléchargé(s) (mise à jour) • ")
                 append(
                     when (newResults) {
                         0 -> "aucun nouveau classement"
@@ -303,6 +336,20 @@ class AlgRepository(
                 if (failed > 0) append(" • $failed course(s) injoignable(s)")
             }
         )
+    }
+
+    /**
+     * Instant à partir duquel les classements gardés sont au format de cette version : un classement
+     * téléchargé avant (version précédente de l'appli) est retéléchargé. 0 sans préférences.
+     */
+    private fun cacheFormatSince(): Long {
+        val prefs = syncPrefs ?: return 0L
+        if (prefs.getInt(PREF_CACHE_FORMAT, 0) < CACHE_FORMAT) {
+            val since = System.currentTimeMillis()
+            prefs.edit().putInt(PREF_CACHE_FORMAT, CACHE_FORMAT).putLong(PREF_CACHE_FORMAT_SINCE, since).apply()
+            return since
+        }
+        return prefs.getLong(PREF_CACHE_FORMAT_SINCE, 0L)
     }
 
     /** Ancien point d'entrée : synchronise tout. */

@@ -207,7 +207,7 @@ fun SettingsAndAssociationScreen(
                         fontWeight = FontWeight.ExtraBold
                     )
                     Text(
-                        text = "Toutes les saisons depuis 2025. Seules les courses nouvelles ou des 3 dernières semaines sont téléchargées ; « Tout retélécharger » reprend tous les classements.",
+                        text = "Toutes les saisons depuis 2025. Les courses nouvelles ou des 3 dernières semaines sont téléchargées, quelques classements plus anciens sont rafraîchis à chaque fois, et ta fiche MyChrono sert de contrôle ; « Tout retélécharger » reprend tous les classements.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
