@@ -19,8 +19,8 @@ import org.robolectric.annotation.Config
 import java.io.File
 
 /**
- * Vérifie que la mise à jour de la base (version 6 → 7) conserve les saisies du téléphone
- * et ne retire que les valeurs inventées par l'ancienne version.
+ * Vérifie que la mise à jour de la base (version 6 → 7 → 8) conserve les saisies du téléphone,
+ * ne retire que les valeurs inventées par l'ancienne version et reprend les dossards en dossards 2026.
  * La base version 6 est recréée à partir du schéma exporté (app/schemas/.../6.json).
  */
 @RunWith(RobolectricTestRunner::class)
@@ -118,12 +118,20 @@ class DatabaseMigrationTest {
         assertEquals("Gras en forêt", dao.getTerrainWeather("alg_2026_r41", "me")?.terrainNotes)
         assertEquals(0, dao.searchDirectory("Laetitia").size)
 
-        dao.upsertStandings(emptyList()) // la nouvelle table existe
+        dao.upsertStandings(emptyList()) // la table de la version 7 existe
+
+        // Version 8 : dossards de la saison 2026 repris des profils, nouvelles tables présentes.
+        val bibs = dao.getSeasonBibsSnapshot().associateBy { it.profileId }
+        assertEquals("697", bibs.getValue("me").bib10km)
+        assertEquals(2026, bibs.getValue("me").seasonYear)
+        assertEquals("1075", bibs.getValue("laetitia").bib5km)
+        assertEquals(0, dao.getRowsForSeason(2026).size)
+        assertEquals(true, race41.isChallenge) // les manches existantes restent des manches du challenge
         room.close()
     }
 
     @Test
-    fun freshInstall_opensVersion7() = runBlocking {
+    fun freshInstall_opensCurrentVersion() = runBlocking {
         val room = Room.databaseBuilder(context, AlgDatabase::class.java, dbName)
             .allowMainThreadQueries()
             .build()

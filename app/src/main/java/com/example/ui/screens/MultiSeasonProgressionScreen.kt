@@ -47,17 +47,19 @@ import com.example.ui.theme.GoldPodium
 import com.example.ui.theme.SemoisRiverTeal
 
 /**
- * Vue Saisons (à partir de 2026 : 2026, 2027...) :
+ * Vue Saisons (2025 = saison de référence publiée par MyChrono, puis 2026, 2027...) :
  * - Sépare strictement le Challenge 10 km et le Challenge 5 km
- * - Affiche le bilan par année >= 2026 (sans jamais afficher 2025)
- * - Compare les chronos et points manche par manche entre 2026 et 2027+
+ * - Affiche le bilan par année
+ * - Compare les chronos parcours par parcours avec la saison précédente
  */
 @Composable
 fun MultiSeasonProgressionScreen(
     activeRunnerName: String,
     selectedDistanceKm: Int,
     multiSeasonSummaries: Map<Int, RunnerChallengeSummary>,
-    sameCourseComparisons2026Vs2027: List<SameCourseYearComparison>,
+    sameCourseComparisons: List<SameCourseYearComparison>,
+    comparisonYearA: Int,
+    comparisonYearB: Int,
     onSelectDistanceKm: (Int) -> Unit,
     onSelectSeasonYear: (Int) -> Unit,
     modifier: Modifier = Modifier
@@ -74,7 +76,9 @@ fun MultiSeasonProgressionScreen(
                 activeRunnerName = activeRunnerName,
                 selectedDistanceKm = selectedDistanceKm,
                 multiSeasonSummaries = multiSeasonSummaries,
-                sameCourseComparisons2026Vs2027 = sameCourseComparisons2026Vs2027,
+                sameCourseComparisons = sameCourseComparisons,
+                comparisonYearA = comparisonYearA,
+                comparisonYearB = comparisonYearB,
                 onSelectDistanceKm = onSelectDistanceKm,
                 onSelectSeasonYear = onSelectSeasonYear
             )
@@ -87,12 +91,14 @@ fun MultiSeasonProgressionContent(
     activeRunnerName: String,
     selectedDistanceKm: Int,
     multiSeasonSummaries: Map<Int, RunnerChallengeSummary>,
-    sameCourseComparisons2026Vs2027: List<SameCourseYearComparison>,
+    sameCourseComparisons: List<SameCourseYearComparison>,
+    comparisonYearA: Int,
+    comparisonYearB: Int,
     onSelectDistanceKm: (Int) -> Unit,
     onSelectSeasonYear: (Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val sortedYears = multiSeasonSummaries.keys.filter { it >= 2026 }.sorted()
+    val sortedYears = multiSeasonSummaries.keys.sorted()
 
     Column(
         modifier = modifier
@@ -119,14 +125,14 @@ fun MultiSeasonProgressionContent(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "Progression Saisons (dès 2026)",
+                            text = "Progression saison par saison",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.ExtraBold,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                            text = "$activeRunnerName • Historique et évolution 2026 → 2027+",
+                            text = "$activeRunnerName • ${sortedYears.firstOrNull() ?: ""} → ${sortedYears.lastOrNull() ?: ""}",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
@@ -179,7 +185,7 @@ fun MultiSeasonProgressionContent(
             val progressFraction = (distSummary.countingRacesCount.toFloat() / AlgChallengeCalculator.MAX_COUNTING_RACES)
                 .coerceIn(0f, 1f)
 
-            val terrainCounts = summary.racesWithContext.mapNotNull { it.terrainWeather?.terrainCondition }
+            val terrainCounts = summary.racesWithContext.mapNotNull { it.terrainWeather?.terrainCondition?.ifBlank { null } }
             val muddyCount = terrainCounts.count { it == "Boueux" || it == "Très gras" }
             val dryCount = terrainCounts.count { it == "Sec" || it == "Souple" }
 
@@ -327,7 +333,7 @@ fun MultiSeasonProgressionContent(
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "Comparaison 2026 vs 2027 ($selectedDistanceKm km)",
+                        text = "Mêmes parcours : $comparisonYearA vs $comparisonYearB ($selectedDistanceKm km)",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.ExtraBold,
                         maxLines = 1,
@@ -335,14 +341,14 @@ fun MultiSeasonProgressionContent(
                     )
                 }
 
-                if (sameCourseComparisons2026Vs2027.isEmpty()) {
+                if (sameCourseComparisons.isEmpty()) {
                     Text(
-                        text = "Aucune course enregistrée sur cette distance pour comparer 2026 et 2027.",
+                        text = "Aucun parcours couru sur cette distance en $comparisonYearA ou en $comparisonYearB.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 } else {
-                    sameCourseComparisons2026Vs2027.forEach { cmp ->
+                    sameCourseComparisons.forEach { cmp ->
                         Surface(
                             shape = RoundedCornerShape(12.dp),
                             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
@@ -364,7 +370,9 @@ fun MultiSeasonProgressionContent(
                                         overflow = TextOverflow.Ellipsis
                                     )
                                     Text(
-                                        text = "2026: ${cmp.resultSeasonA?.officialTimeFormatted ?: "--:--"} (${cmp.resultSeasonA?.challengePoints ?: 0} pts) • 2027: ${cmp.resultSeasonB?.officialTimeFormatted ?: "À venir"}",
+                                        text = "${cmp.yearA} : ${cmp.resultSeasonA?.officialTimeFormatted ?: "non courue"}" +
+                                            (cmp.resultSeasonA?.let { " (${it.challengePoints} pts)" } ?: "") +
+                                            " • ${cmp.yearB} : ${cmp.resultSeasonB?.officialTimeFormatted ?: "non courue"}",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         maxLines = 1,

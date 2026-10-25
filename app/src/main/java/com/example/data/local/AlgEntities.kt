@@ -1,5 +1,6 @@
 package com.example.data.local
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 
@@ -63,8 +64,23 @@ data class RaceEntity(
     val routeLinks: String? = null,
     val sourceUrl: String? = null,
     val statusLabel: String? = null,
-    val finishersCount: Int? = null
+    val finishersCount: Int? = null,
+    /**
+     * Manche du Challenge (true) ou course « Hors challenge » publiée par MyChrono (false).
+     * Une course hors challenge ne compte jamais pour le challenge (ni Top 15, ni classement).
+     */
+    @ColumnInfo(defaultValue = "1")
+    val isChallenge: Boolean = true,
+    /** Libellé de la compétition MyChrono (« Challenge ALG 2026 », « Hors challenge ALG 2026 »). */
+    val competitionLabel: String? = null,
+    /** Libellés réels des distances hors challenge (ex. « 14 km » et « 7 km ») ; null pour une manche. */
+    val longDistanceLabel: String? = null,
+    val shortDistanceLabel: String? = null
 ) {
+    /** Libellé affiché pour la grande (10) ou la petite (5) distance de cette course. */
+    fun distanceNameFor(challengeDistanceKm: Int): String =
+        if (challengeDistanceKm == 5) shortDistanceLabel ?: "5 km" else longDistanceLabel ?: "10 km"
+
     /** Longueur réelle de la distance du challenge demandée (10 ou 5), ou null si inconnue. */
     fun realDistanceKmFor(challengeDistanceKm: Int): Double? =
         if (challengeDistanceKm == 5) distance5Km else distanceKm.takeIf { it > 0.0 }
@@ -94,7 +110,11 @@ data class RaceResultEntity(
     val totalFinishers: Int,
     val categoryRank: Int,
     val categoryTotal: Int,            // Nombre réel d'arrivants de la même catégorie sur cette distance
-    val challengePoints: Int           // Points officiels du Challenge (1200 pts au 1er de chaque distance)
+    val challengePoints: Int,          // Points officiels du Challenge (1200 pts au 1er) ; 0 hors challenge
+    /** Libellé réel de la distance courue (« 10 km », ou « 14 km » sur une course hors challenge). */
+    val distanceName: String? = null,
+    /** Longueur réelle de la distance courue, en km. */
+    val distanceKm: Double? = null
 )
 
 @Entity(
@@ -123,8 +143,10 @@ data class ActivityMetricsEntity(
 data class RaceTerrainWeatherEntity(
     val raceId: String,
     val profileId: String,
-    val terrainCondition: String = "Sec", // "Sec", "Souple", "Boueux", "Très gras"
-    val weatherCondition: String = "Nuageux", // "Soleil", "Nuageux", "Pluie", "Vent / Frais"
+    /** Terrain noté par le coureur ("Sec", "Souple", "Boueux", "Très gras") ; "" si non renseigné. */
+    val terrainCondition: String = "",
+    /** Ancienne saisie manuelle de la météo ; "" si non renseignée (la météo réelle vient d'Open-Meteo). */
+    val weatherCondition: String = "",
     val temperatureC: Int? = null,
     val terrainNotes: String = "",
     val isPlannedForSimulator: Boolean = false,
@@ -168,4 +190,92 @@ data class ChallengeStandingEntity(
     val overallRank: Int,
     val categoryRank: Int,
     val computedAtEpochMillis: Long
+)
+
+/** Dossards d'un profil pour une saison donnée (les dossards changent d'une saison à l'autre). */
+@Entity(
+    tableName = "season_bibs",
+    primaryKeys = ["profileId", "seasonYear"]
+)
+data class SeasonBibEntity(
+    val profileId: String,
+    val seasonYear: Int,
+    val bib10km: String = "",
+    val bib5km: String = ""
+)
+
+/**
+ * Résultat brut publié par MyChrono (tous les coureurs), gardé sur le téléphone :
+ * une manche close ne change plus, il n'est donc pas nécessaire de la retélécharger.
+ */
+@Entity(
+    tableName = "mychrono_rows",
+    primaryKeys = ["raceId", "distanceLabel", "rowIndex"]
+)
+data class MyChronoRowEntity(
+    val raceId: String,
+    /** "10 km" (grande distance) ou "5 km" (petite distance), y compris hors challenge. */
+    val distanceLabel: String,
+    val rowIndex: Int,
+    val seasonYear: Int,
+    val isChallenge: Boolean,
+    /** Libellé réel publié (« 10 km », « 14 km »…). */
+    val distanceName: String,
+    val distanceKm: Double,
+    val runnerId: String,
+    val bibNumber: String,
+    val fullName: String,
+    val club: String,
+    val category: String,
+    val sex: String,
+    val timeSeconds: Int,
+    val overallRank: Int,
+    val totalFinishers: Int,
+    val categoryRank: Int,
+    val categoryTotal: Int,
+    val points: Int
+)
+
+/** Dernier téléchargement des résultats d'une course. */
+@Entity(tableName = "race_fetch_state")
+data class RaceFetchStateEntity(
+    @PrimaryKey val raceId: String,
+    val seasonYear: Int,
+    val raceDateIso: String,
+    val fetchedAtEpochMillis: Long,
+    val rowCount: Int
+)
+
+/**
+ * Indice de difficulté d'un parcours, calculé sur les coureurs réguliers de la saison :
+ * médiane, pour ces coureurs, de (allure sur ce parcours / allure habituelle).
+ * 1,08 = parcours 8 % plus lent qu'un parcours moyen de la saison.
+ */
+@Entity(
+    tableName = "course_factors",
+    primaryKeys = ["raceId", "distanceLabel"]
+)
+data class CourseFactorEntity(
+    val raceId: String,
+    val distanceLabel: String,
+    val seasonYear: Int,
+    val factor: Double,
+    val regularsCount: Int
+)
+
+/** Météo réelle au départ d'une course (Open-Meteo, modèle de réanalyse ou de prévision). */
+@Entity(tableName = "race_weather")
+data class RaceWeatherEntity(
+    @PrimaryKey val raceId: String,
+    /** Heure de départ lue dans l'horaire publié ; null si l'horaire n'en donne pas. */
+    val startHourLocal: Int?,
+    val temperatureC: Double?,
+    val precipitationDuringMm: Double?,
+    val rainPrevious72hMm: Double?,
+    val windKmh: Double?,
+    val weatherCode: Int?,
+    val dayMinC: Double?,
+    val dayMaxC: Double?,
+    val source: String,
+    val fetchedAtEpochMillis: Long
 )

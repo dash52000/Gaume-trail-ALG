@@ -88,8 +88,8 @@ fun RunnerAndSeasonHeaderBar(
     modifier: Modifier = Modifier
 ) {
     val seasonsToDisplay = remember(availableSeasons) {
-        val clean = availableSeasons.filter { it >= 2026 }.sorted()
-        if (clean.isEmpty()) listOf(2026, 2027) else clean
+        val clean = availableSeasons.sorted()
+        if (clean.isEmpty()) listOf(java.time.LocalDate.now().year) else clean
     }
 
     Surface(
@@ -391,7 +391,7 @@ fun TerrainAndWeatherMiniBadge(
                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
             )
         }
-        Surface(
+        if (weatherCondition.isNotBlank() || temperatureC != null) Surface(
             shape = RoundedCornerShape(6.dp),
             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
         ) {
@@ -407,7 +407,7 @@ fun TerrainAndWeatherMiniBadge(
                 )
                 Spacer(modifier = Modifier.width(3.dp))
                 Text(
-                    text = if (temperatureC != null) "$weatherCondition ${temperatureC}°C" else weatherCondition,
+                    text = if (temperatureC != null) "$weatherCondition ${temperatureC}°C".trim() else weatherCondition,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1
@@ -707,6 +707,7 @@ fun GaumeGpsAndElevationCanvas(
 @Composable
 fun EditProfileBibAndDistanceDialog(
     profile: RunnerProfileEntity,
+    seasonYear: Int? = null,
     onDismiss: () -> Unit,
     onConfirm: (
         displayName: String,
@@ -730,7 +731,7 @@ fun EditProfileBibAndDistanceDialog(
         onDismissRequest = onDismiss,
         title = {
             Text(
-                text = "Dossards & Distance (${profile.displayName})",
+                text = "Dossards ${seasonYear ?: ""} (${profile.displayName})".replace("  ", " "),
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold
             )
@@ -741,7 +742,7 @@ fun EditProfileBibAndDistanceDialog(
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Text(
-                    text = "Les résultats du 10 km et du 5 km sont comptabilisés séparément pour chaque Challenge.",
+                    text = "Dossards de la saison ${seasonYear ?: ""} : ils changent chaque année. Les résultats du 10 km et du 5 km sont comptés séparément.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

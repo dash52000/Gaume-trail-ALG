@@ -24,7 +24,7 @@ import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.FormatListBulleted
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.MilitaryTech
+import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material3.Icon
@@ -112,6 +112,9 @@ fun GaumeTrailAlgAppContent(
 
     val selectedRaceItem = uiState.selectedRaceIdForDetail?.let { detailId ->
         uiState.activeRunnerSummary?.racesWithContext?.find { it.race.raceId == detailId }
+            ?: uiState.horsChallengeItems.find { it.race.raceId == detailId }
+            ?: uiState.multiSeasonSummariesForActiveRunner.values
+                .firstNotNullOfOrNull { s -> s.racesWithContext.find { it.race.raceId == detailId } }
     }
 
     if (selectedRaceItem != null) {
@@ -139,13 +142,11 @@ fun GaumeTrailAlgAppContent(
                     distanceKm = distKm
                 )
             },
-            onSaveRaceTerrainAndWeather = { profileId, terrain, weather, tempC, notes, isPlanned, plannedDistKm, targetPts ->
+            onSaveRaceTerrainAndWeather = { profileId, terrain, notes, isPlanned, plannedDistKm, targetPts ->
                 viewModel.saveRaceTerrainAndWeather(
                     raceId = selectedRaceItem.race.raceId,
                     profileId = profileId,
                     terrainCondition = terrain,
-                    weatherCondition = weather,
-                    temperatureC = tempC,
                     terrainNotes = notes,
                     isPlannedForSimulator = isPlanned,
                     plannedDistanceKm = plannedDistKm,
@@ -236,7 +237,7 @@ fun GaumeTrailAlgAppContent(
                 }
             },
             bottomBar = {
-                // BARRE DE NAVIGATION À 5 ONGLETS CLAIRS : [Courses] [Perfs] [Trio & Carte] [Badges] [Réglages]
+                // BARRE DE NAVIGATION À 5 ONGLETS : [Courses] [Perfs] [Trio & Carte] [Passeport] [Réglages]
                 NavigationBar(
                     containerColor = MaterialTheme.colorScheme.surface,
                     tonalElevation = 4.dp
@@ -303,13 +304,13 @@ fun GaumeTrailAlgAppContent(
                         onClick = { viewModel.selectTab(AlgBottomTab.BADGES) },
                         icon = {
                             Icon(
-                                imageVector = Icons.Default.MilitaryTech,
-                                contentDescription = "Badges"
+                                imageVector = Icons.Default.Place,
+                                contentDescription = "Passeport"
                             )
                         },
                         label = {
                             Text(
-                                text = "Badges",
+                                text = "Passeport",
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
@@ -356,9 +357,15 @@ fun GaumeTrailAlgAppContent(
                             perfsSubTab = uiState.perfsSubTab,
                             preselectedShareRaceId = uiState.preselectedShareRaceId,
                             multiSeasonSummaries = uiState.multiSeasonSummariesForActiveRunner,
-                            sameCourseComparisons2026Vs2027 = uiState.sameCourseComparisons2026Vs2027,
+                            sameCourseComparisons = uiState.sameCourseComparisons,
+                            comparisonYearA = uiState.comparisonYearA,
+                            comparisonYearB = uiState.comparisonYearB,
                             trioStandings = uiState.trioStandings,
                             profiles = uiState.profiles,
+                            horsChallengeItems = uiState.horsChallengeItems,
+                            passport = uiState.activePassport,
+                            activeRecap = uiState.activeRecap,
+                            trioRecaps = uiState.trioRecaps,
                             onSelectDistanceKm = { viewModel.selectChallengeDistance(it) },
                             onSelectFilterMode = { viewModel.selectRaceFilterMode(it) },
                             onOpenRaceDetail = { viewModel.openRaceDetail(it) },
@@ -387,8 +394,6 @@ fun GaumeTrailAlgAppContent(
                                     raceId = raceId,
                                     profileId = uiState.selectedProfileId,
                                     terrainCondition = terrainCond,
-                                    weatherCondition = existingTw?.weatherCondition ?: "Nuageux",
-                                    temperatureC = existingTw?.temperatureC,
                                     terrainNotes = existingTw?.terrainNotes.orEmpty(),
                                     isPlannedForSimulator = existingTw?.isPlannedForSimulator ?: false,
                                     plannedDistanceKm = existingTw?.plannedDistanceKm ?: uiState.selectedChallengeDistanceKm,
@@ -417,6 +422,7 @@ fun GaumeTrailAlgAppContent(
                             selectedDistanceKm = uiState.selectedChallengeDistanceKm,
                             profiles = uiState.profiles,
                             trioSummaries = uiState.trioSeasonSummaries,
+                            horsChallengeItems = uiState.horsChallengeItems,
                             onOpenRaceDetail = { viewModel.openRaceDetail(it) },
                             onOpenTop15Simulator = { viewModel.setTop15SimulatorModalVisible(true) },
                             onTogglePlannedSimulatorRace = { raceId, isPlanned, targetPts ->
@@ -434,8 +440,6 @@ fun GaumeTrailAlgAppContent(
                                     raceId = raceId,
                                     profileId = uiState.selectedProfileId,
                                     terrainCondition = terrainCond,
-                                    weatherCondition = existingTw?.weatherCondition ?: "Nuageux",
-                                    temperatureC = existingTw?.temperatureC,
                                     terrainNotes = existingTw?.terrainNotes.orEmpty(),
                                     isPlannedForSimulator = existingTw?.isPlannedForSimulator ?: false,
                                     plannedDistanceKm = existingTw?.plannedDistanceKm ?: uiState.selectedChallengeDistanceKm,
@@ -450,7 +454,9 @@ fun GaumeTrailAlgAppContent(
                             activeRunnerName = uiState.activeRunnerSummary?.profile?.displayName ?: "Moi",
                             selectedDistanceKm = uiState.selectedChallengeDistanceKm,
                             multiSeasonSummaries = uiState.multiSeasonSummariesForActiveRunner,
-                            sameCourseComparisons2026Vs2027 = uiState.sameCourseComparisons2026Vs2027,
+                            sameCourseComparisons = uiState.sameCourseComparisons,
+                            comparisonYearA = uiState.comparisonYearA,
+                            comparisonYearB = uiState.comparisonYearB,
                             onSelectDistanceKm = { viewModel.selectChallengeDistance(it) },
                             onSelectSeasonYear = { year ->
                                 viewModel.selectSeasonYear(year)

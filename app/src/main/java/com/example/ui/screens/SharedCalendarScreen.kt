@@ -72,6 +72,7 @@ fun SharedCalendarScreen(
     selectedDistanceKm: Int,
     profiles: List<RunnerProfileEntity>,
     trioSummaries: Map<String, RunnerChallengeSummary>,
+    horsChallengeItems: List<RaceItemWithContext> = emptyList(),
     onOpenRaceDetail: (String) -> Unit,
     onOpenTop15Simulator: () -> Unit = {},
     onTogglePlannedSimulatorRace: (raceId: String, isPlanned: Boolean, targetPoints: Int) -> Unit,
@@ -86,11 +87,17 @@ fun SharedCalendarScreen(
     val allRaces = primarySummary?.racesWithContext.orEmpty()
     val simulatorSummary = primarySummary?.simulatorForDistance(selectedDistanceKm)
 
-    val filteredRaces = remember(allRaces, displayFilter) {
+    // Calendrier complet : manches et courses hors challenge, dans l'ordre des dates.
+    val calendarRaces = remember(allRaces, horsChallengeItems) {
+        (allRaces + horsChallengeItems).sortedWith(
+            compareBy<RaceItemWithContext>({ it.race.dateIso }, { it.race.roundNumber })
+        )
+    }
+    val filteredRaces = remember(calendarRaces, displayFilter) {
         when (displayFilter) {
-            CalendarDisplayFilter.ALL -> allRaces
-            CalendarDisplayFilter.COMPLETED -> allRaces.filter { it.race.isCompleted }
-            CalendarDisplayFilter.UPCOMING -> allRaces.filter { !it.race.isCompleted }
+            CalendarDisplayFilter.ALL -> calendarRaces
+            CalendarDisplayFilter.COMPLETED -> calendarRaces.filter { it.race.isCompleted }
+            CalendarDisplayFilter.UPCOMING -> calendarRaces.filter { !it.race.isCompleted }
         }
     }
 
@@ -219,7 +226,8 @@ fun SharedCalendarScreen(
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "Calendrier Officiel $seasonYear (${allRaces.size} manches)",
+                            text = "Calendrier $seasonYear (${allRaces.size} manches" +
+                                if (horsChallengeItems.isNotEmpty()) " + ${horsChallengeItems.size} hors challenge)" else ")",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.ExtraBold,
                             maxLines = 1,
@@ -232,7 +240,7 @@ fun SharedCalendarScreen(
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         val filterOptions = listOf(
-                            CalendarDisplayFilter.ALL to "Toutes (${allRaces.size})",
+                            CalendarDisplayFilter.ALL to "Toutes (${calendarRaces.size})",
                             CalendarDisplayFilter.COMPLETED to "Terminées",
                             CalendarDisplayFilter.UPCOMING to "À venir"
                         )
@@ -460,14 +468,16 @@ private fun SharedCalendarRaceCard(
                 ) {
                     Surface(
                         shape = RoundedCornerShape(8.dp),
-                        color = if (race.isSeasonFinale) {
+                        color = if (!race.isChallenge) {
+                            MaterialTheme.colorScheme.tertiaryContainer
+                        } else if (race.isSeasonFinale) {
                             GoldPodium.copy(alpha = 0.22f)
                         } else {
                             MaterialTheme.colorScheme.primaryContainer
                         }
                     ) {
                         Text(
-                            text = "M#${race.roundNumber}",
+                            text = if (race.isChallenge) "M#${race.roundNumber}" else "HC",
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Bold,
                             color = if (race.isSeasonFinale) {
@@ -489,7 +499,12 @@ private fun SharedCalendarRaceCard(
                             overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                            text = "${race.village} • ${race.dateIso} • 10 km & 5 km",
+                            text = "${race.village} • ${race.dateIso} • " + if (race.isChallenge) {
+                                "10 km & 5 km"
+                            } else {
+                                listOfNotNull(race.longDistanceLabel, race.shortDistanceLabel).joinToString(" & ")
+                                    .ifBlank { null }?.let { "$it • " }.orEmpty() + "hors challenge"
+                            },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
@@ -501,7 +516,7 @@ private fun SharedCalendarRaceCard(
                 Spacer(modifier = Modifier.width(6.dp))
 
                 // Terrain et météo affichés seulement s'ils ont été saisis.
-                if (tw != null) {
+                if (tw != null && tw.terrainCondition.isNotBlank()) {
                     TerrainAndWeatherMiniBadge(
                         terrainCondition = tw.terrainCondition,
                         weatherCondition = tw.weatherCondition,
@@ -571,7 +586,7 @@ private fun SharedCalendarRaceCard(
                                         )
                                         Spacer(modifier = Modifier.width(6.dp))
                                         Text(
-                                            text = "${profile.displayName.substringBefore(" ")} (${result.distanceLabel})",
+                                            text = "${profile.displayName.substringBefore(" ")} (${result.distanceName ?: result.distanceLabel})",
                                             style = MaterialTheme.typography.bodySmall,
                                             fontWeight = FontWeight.SemiBold,
                                             maxLines = 1,
@@ -613,7 +628,7 @@ private fun SharedCalendarRaceCard(
                                                     Spacer(modifier = Modifier.width(3.dp))
                                                 }
                                                 Text(
-                                                    text = "${result.challengePoints} pts",
+                                                    text = if (race.isChallenge) "${result.challengePoints} pts" else "hors challenge",
                                                     style = MaterialTheme.typography.labelSmall,
                                                     color = if (isCounting) {
                                                         CountingTop15BadgeGreen

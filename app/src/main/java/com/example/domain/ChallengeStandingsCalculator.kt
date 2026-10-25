@@ -16,15 +16,7 @@ data class ProfileChallengeStanding(
     val distanceLabel: String,
     val standing: ChallengeStandingEntity,
     val runnersInDistance: Int,
-    val runnersInCategory: Int,
-    val nextAbove: ChallengeStandingEntity?,
-    /** Points supplémentaires nécessaires pour dépasser le coureur juste devant. */
-    val pointsGapToNextAbove: Int?,
-    /**
-     * Score minimal d'une prochaine course pour dépasser le coureur juste devant :
-     * avec 15 courses déjà comptées, une nouvelle course ne remplace que la plus faible.
-     */
-    val racePointsNeededToPassNext: Int?
+    val runnersInCategory: Int
 )
 
 object ChallengeStandingsCalculator {
@@ -121,24 +113,13 @@ object ChallengeStandingsCalculator {
             }
             ?: return null
 
-        val nextAbove = inDistance
-            .filter { it.totalPoints > mine.totalPoints }
-            .minByOrNull { it.totalPoints }
-        val gap = nextAbove?.let { it.totalPoints - mine.totalPoints + 1 }
-        val racePointsNeeded = gap?.let {
-            if (mine.racesCounted >= MAX_COUNTING_RACES) mine.lowestCountedPoints + it else it
-        }
-
         return ProfileChallengeStanding(
             profileId = profile.profileId,
             profileName = profile.displayName,
             distanceLabel = label,
             standing = mine,
             runnersInDistance = inDistance.size,
-            runnersInCategory = inDistance.count { it.category == mine.category },
-            nextAbove = nextAbove,
-            pointsGapToNextAbove = gap,
-            racePointsNeededToPassNext = racePointsNeeded
+            runnersInCategory = inDistance.count { it.category == mine.category }
         )
     }
 }

@@ -23,13 +23,13 @@ interface AlgDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertRunnerProfile(profile: RunnerProfileEntity)
 
-    @Query("SELECT * FROM races WHERE seasonYear = :seasonYear AND seasonYear >= 2026 ORDER BY roundNumber ASC")
+    @Query("SELECT * FROM races WHERE seasonYear = :seasonYear AND seasonYear >= 2025 ORDER BY roundNumber ASC")
     fun observeRacesBySeason(seasonYear: Int): Flow<List<RaceEntity>>
 
-    @Query("SELECT * FROM races WHERE seasonYear >= 2026 ORDER BY seasonYear DESC, roundNumber ASC")
+    @Query("SELECT * FROM races WHERE seasonYear >= 2025 ORDER BY seasonYear DESC, roundNumber ASC")
     fun observeAllRaces(): Flow<List<RaceEntity>>
 
-    @Query("SELECT * FROM races WHERE seasonYear = :seasonYear AND seasonYear >= 2026 ORDER BY roundNumber ASC")
+    @Query("SELECT * FROM races WHERE seasonYear = :seasonYear AND seasonYear >= 2025 ORDER BY roundNumber ASC")
     suspend fun getRacesBySeasonSnapshot(seasonYear: Int): List<RaceEntity>
 
     @Query("SELECT * FROM races WHERE raceId = :raceId LIMIT 1")
@@ -38,16 +38,19 @@ interface AlgDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertRaces(races: List<RaceEntity>)
 
-    @Query("DELETE FROM races WHERE seasonYear < 2026")
-    suspend fun deletePre2026Races()
+    @Query("DELETE FROM races WHERE seasonYear < 2025")
+    suspend fun deletePre2025Races()
+
+    @Query("SELECT * FROM races WHERE seasonYear >= 2025")
+    suspend fun getAllRacesSnapshot(): List<RaceEntity>
 
     @Query("DELETE FROM races WHERE seasonYear = :seasonYear")
     suspend fun deleteRacesBySeason(seasonYear: Int)
 
-    @Query("SELECT * FROM race_results WHERE seasonYear = :seasonYear AND seasonYear >= 2026")
+    @Query("SELECT * FROM race_results WHERE seasonYear = :seasonYear AND seasonYear >= 2025")
     fun observeResultsBySeason(seasonYear: Int): Flow<List<RaceResultEntity>>
 
-    @Query("SELECT * FROM race_results WHERE seasonYear >= 2026")
+    @Query("SELECT * FROM race_results WHERE seasonYear >= 2025")
     fun observeAllResults(): Flow<List<RaceResultEntity>>
 
     @Query("SELECT * FROM race_results")
@@ -56,8 +59,8 @@ interface AlgDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertRaceResults(results: List<RaceResultEntity>)
 
-    @Query("DELETE FROM race_results WHERE seasonYear < 2026")
-    suspend fun deletePre2026Results()
+    @Query("DELETE FROM race_results WHERE seasonYear < 2025")
+    suspend fun deletePre2025Results()
 
     @Query("DELETE FROM race_results WHERE seasonYear = :seasonYear")
     suspend fun deleteResultsBySeason(seasonYear: Int)
@@ -122,7 +125,7 @@ interface AlgDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertDirectoryEntries(entries: List<MyChronoDirectoryEntry>)
 
-    @Query("SELECT * FROM challenge_standings WHERE seasonYear >= 2026")
+    @Query("SELECT * FROM challenge_standings WHERE seasonYear >= 2025")
     fun observeAllStandings(): Flow<List<ChallengeStandingEntity>>
 
     @Query("DELETE FROM challenge_standings WHERE seasonYear = :seasonYear")
@@ -130,4 +133,59 @@ interface AlgDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertStandings(standings: List<ChallengeStandingEntity>)
+
+    @Query("SELECT * FROM race_bib_overrides")
+    suspend fun getAllBibOverridesSnapshot(): List<RaceBibOverrideEntity>
+
+    // --- Dossards par saison ---
+    @Query("SELECT * FROM season_bibs")
+    fun observeSeasonBibs(): Flow<List<SeasonBibEntity>>
+
+    @Query("SELECT * FROM season_bibs")
+    suspend fun getSeasonBibsSnapshot(): List<SeasonBibEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertSeasonBib(entity: SeasonBibEntity)
+
+    // --- Résultats bruts MyChrono (cache) ---
+    @Query("SELECT * FROM mychrono_rows WHERE seasonYear = :seasonYear")
+    suspend fun getRowsForSeason(seasonYear: Int): List<MyChronoRowEntity>
+
+    @Query("SELECT * FROM mychrono_rows WHERE raceId = :raceId")
+    suspend fun getRowsForRace(raceId: String): List<MyChronoRowEntity>
+
+    @Query("DELETE FROM mychrono_rows WHERE raceId = :raceId")
+    suspend fun deleteRowsForRace(raceId: String)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertRows(rows: List<MyChronoRowEntity>)
+
+    @Query("SELECT DISTINCT seasonYear FROM mychrono_rows")
+    suspend fun getSeasonsWithRows(): List<Int>
+
+    @Query("SELECT * FROM race_fetch_state")
+    suspend fun getFetchStates(): List<RaceFetchStateEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertFetchState(state: RaceFetchStateEntity)
+
+    // --- Indices de difficulté des parcours ---
+    @Query("SELECT * FROM course_factors")
+    fun observeCourseFactors(): Flow<List<CourseFactorEntity>>
+
+    @Query("DELETE FROM course_factors WHERE seasonYear = :seasonYear")
+    suspend fun deleteCourseFactorsBySeason(seasonYear: Int)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertCourseFactors(factors: List<CourseFactorEntity>)
+
+    // --- Météo réelle ---
+    @Query("SELECT * FROM race_weather")
+    fun observeRaceWeather(): Flow<List<RaceWeatherEntity>>
+
+    @Query("SELECT * FROM race_weather")
+    suspend fun getRaceWeatherSnapshot(): List<RaceWeatherEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertRaceWeather(entity: RaceWeatherEntity)
 }

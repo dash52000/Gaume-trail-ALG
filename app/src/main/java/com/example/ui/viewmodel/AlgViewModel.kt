@@ -7,30 +7,40 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.data.local.ActivityMetricsEntity
 import com.example.data.local.ChallengeStandingEntity
+import com.example.data.local.CourseFactorEntity
+import com.example.data.local.GaumeInitialSeedData
 import com.example.data.local.MyChronoDirectoryEntry
 import com.example.data.local.RaceBibOverrideEntity
 import com.example.data.local.RaceEntity
 import com.example.data.local.RaceResultEntity
 import com.example.data.local.RaceTerrainWeatherEntity
+import com.example.data.local.RaceWeatherEntity
 import com.example.data.local.RunnerProfileEntity
+import com.example.data.local.SeasonBibEntity
 import com.example.data.repository.AlgRepository
 import com.example.domain.AlgChallengeCalculator
 import com.example.domain.ChallengeStandingsCalculator
+import com.example.domain.CourseDifficultyCalculator
 import com.example.domain.ProfileChallengeStanding
+import com.example.domain.RaceItemWithContext
 import com.example.domain.RunnerChallengeSummary
 import com.example.domain.SameCourseYearComparison
+import com.example.domain.SeasonInsightsCalculator
+import com.example.domain.SeasonRecap
+import com.example.domain.VillagePassport
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import java.time.LocalDate
 
 enum class AlgBottomTab {
     OVERVIEW, // 1. Courses
-    PERFS, // 2. Pronostics, Records, Carte Bilan & Saisons
+    PERFS, // 2. Forme, Records, Bilan & Saisons
     SHARED_CALENDAR, // 3. Trio & Carte
-    BADGES, // 4. Badges & Passeport
+    BADGES, // 4. Passeport des villages
     SETTINGS, // 5. Réglages
     MULTI_SEASON
 }
@@ -46,27 +56,40 @@ data class AlgUiState(
     val isLoading: Boolean = true,
     val isSyncingMyChrono: Boolean = false,
     val selectedTab: AlgBottomTab = AlgBottomTab.OVERVIEW,
-    val perfsSubTab: Int = 0, // 0 = Pronostics, 1 = Records, 2 = Carte Bilan & Export, 3 = Saisons
+    val perfsSubTab: Int = 0, // 0 = Forme, 1 = Records, 2 = Bilan & Carte, 3 = Saisons
     val preselectedShareRaceId: String? = null,
     val selectedProfileId: String = "me",
-    val selectedSeasonYear: Int = 2026,
-    val availableSeasons: List<Int> = listOf(2026, 2027),
+    val selectedSeasonYear: Int = LocalDate.now().year,
+    val availableSeasons: List<Int> = listOf(LocalDate.now().year),
     val selectedChallengeDistanceKm: Int = 10, // 10 pour Challenge 10 km, 5 pour Challenge 5 km
     val raceFilterMode: RaceFilterMode = RaceFilterMode.ALL,
     val selectedRaceIdForDetail: String? = null,
     val showTop15SimulatorModal: Boolean = false,
+    /** Profils avec les dossards de la saison affichée. */
     val profiles: List<RunnerProfileEntity> = emptyList(),
     val activeRunnerSummary: RunnerChallengeSummary? = null,
     val trioSeasonSummaries: Map<String, RunnerChallengeSummary> = emptyMap(),
     val multiSeasonSummariesForActiveRunner: Map<Int, RunnerChallengeSummary> = emptyMap(),
-    val sameCourseComparisons2026Vs2027: List<SameCourseYearComparison> = emptyList(),
+    val sameCourseComparisons: List<SameCourseYearComparison> = emptyList(),
+    val comparisonYearA: Int = LocalDate.now().year - 1,
+    val comparisonYearB: Int = LocalDate.now().year,
     val bibOverridesByRaceAndProfile: Map<String, Map<String, RaceBibOverrideEntity>> = emptyMap(),
     val terrainWeatherByRaceAndProfile: Map<String, Map<String, RaceTerrainWeatherEntity>> = emptyMap(),
     val directorySearchResults: List<MyChronoDirectoryEntry> = emptyList(),
     val directorySearchQuery: String = "",
     val statusBannerMessage: String? = null,
     /** Classement provisoire du Challenge : profileId → (distance 10 ou 5 → classement). */
-    val trioStandings: Map<String, Map<Int, ProfileChallengeStanding>> = emptyMap()
+    val trioStandings: Map<String, Map<Int, ProfileChallengeStanding>> = emptyMap(),
+    /** Courses hors challenge de la saison (résultats récupérés, jamais comptés pour le challenge). */
+    val horsChallengeItems: List<RaceItemWithContext> = emptyList(),
+    /** Passeport des villages du profil actif, toutes saisons confondues. */
+    val activePassport: VillagePassport? = null,
+    /** Bilan de la saison affichée pour chaque profil (sur sa distance du challenge). */
+    val trioRecaps: Map<String, SeasonRecap> = emptyMap(),
+    /** Bilan du profil actif sur la distance choisie. */
+    val activeRecap: SeasonRecap? = null,
+    /** profileId → true si les dossards de la saison affichée ont été saisis. */
+    val seasonBibsDeclared: Map<String, Boolean> = emptyMap()
 )
 
 private data class ControlState(
@@ -74,7 +97,8 @@ private data class ControlState(
     val perfsSubTab: Int = 0,
     val preselectedShareRaceId: String? = null,
     val selectedProfileId: String = "me",
-    val selectedSeasonYear: Int = 2026,
+    /** null = saison choisie automatiquement (la plus récente qui a déjà commencé). */
+    val selectedSeasonYear: Int? = null,
     val selectedChallengeDistanceKm: Int = 10,
     val raceFilterMode: RaceFilterMode = RaceFilterMode.ALL,
     val selectedRaceIdForDetail: String? = null,
@@ -85,14 +109,17 @@ private data class ControlState(
 )
 
 private data class DataFlowsBundle(
-    val profiles: List<RunnerProfileEntity>,
-    val allRaces: List<RaceEntity>,
-    val allResults: List<RaceResultEntity>,
-    val allOverrides: List<RaceBibOverrideEntity>,
-    val allMetrics: List<ActivityMetricsEntity>,
-    val allTerrainWeather: List<RaceTerrainWeatherEntity>,
-    val directory: List<MyChronoDirectoryEntry>,
-    val standings: List<ChallengeStandingEntity> = emptyList()
+    val profiles: List<RunnerProfileEntity> = emptyList(),
+    val allRaces: List<RaceEntity> = emptyList(),
+    val allResults: List<RaceResultEntity> = emptyList(),
+    val allOverrides: List<RaceBibOverrideEntity> = emptyList(),
+    val allMetrics: List<ActivityMetricsEntity> = emptyList(),
+    val allTerrainWeather: List<RaceTerrainWeatherEntity> = emptyList(),
+    val directory: List<MyChronoDirectoryEntry> = emptyList(),
+    val standings: List<ChallengeStandingEntity> = emptyList(),
+    val seasonBibs: List<SeasonBibEntity> = emptyList(),
+    val courseFactors: List<CourseFactorEntity> = emptyList(),
+    val raceWeather: List<RaceWeatherEntity> = emptyList()
 )
 
 class AlgViewModel(
@@ -105,78 +132,137 @@ class AlgViewModel(
         combine(
             repository.runnerProfilesFlow,
             repository.allRacesFlow,
-            repository.allResultsFlow
-        ) { profiles, races, results ->
-            Triple(profiles, races, results)
+            repository.allResultsFlow,
+            repository.allBibOverridesFlow
+        ) { profiles, races, results, overrides ->
+            DataFlowsBundle(profiles = profiles, allRaces = races, allResults = results, allOverrides = overrides)
         },
         combine(
-            repository.allBibOverridesFlow,
             repository.allActivityMetricsFlow,
             repository.allTerrainWeatherFlow,
             repository.directoryFlow,
             repository.standingsFlow
-        ) { overrides, metrics, terrainWeather, directory, standings ->
-            DataFlowsBundle(
-                profiles = emptyList(),
-                allRaces = emptyList(),
-                allResults = emptyList(),
-                allOverrides = overrides,
-                allMetrics = metrics,
-                allTerrainWeather = terrainWeather,
-                directory = directory,
-                standings = standings
-            )
+        ) { metrics, terrainWeather, directory, standings ->
+            DataFlowsBundle(allMetrics = metrics, allTerrainWeather = terrainWeather, directory = directory, standings = standings)
+        },
+        combine(
+            repository.seasonBibsFlow,
+            repository.courseFactorsFlow,
+            repository.raceWeatherFlow
+        ) { bibs, factors, weather ->
+            DataFlowsBundle(seasonBibs = bibs, courseFactors = factors, raceWeather = weather)
         }
-    ) { (profiles, races, results), partial ->
-        partial.copy(
-            profiles = profiles,
-            allRaces = races,
-            allResults = results
+    ) { a, b, c ->
+        a.copy(
+            allMetrics = b.allMetrics,
+            allTerrainWeather = b.allTerrainWeather,
+            directory = b.directory,
+            standings = b.standings,
+            seasonBibs = c.seasonBibs,
+            courseFactors = c.courseFactors,
+            raceWeather = c.raceWeather
         )
     }
 
     val uiState: StateFlow<AlgUiState> = combine(
         dataBundleFlow,
         controlFlow
-    ) { bundle, ctrl ->
-        val profiles = bundle.profiles
-        val allRaces = bundle.allRaces.filter { it.seasonYear >= 2026 }
-        val allResults = bundle.allResults.filter { it.seasonYear >= 2026 }
+    ) { bundle, ctrl -> buildUiState(bundle, ctrl) }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = AlgUiState()
+        )
+
+    /** Dossards d'un profil pour une saison : ceux saisis, sinon ceux trouvés dans ses résultats MyChrono. */
+    private fun profileForSeason(
+        profile: RunnerProfileEntity,
+        seasonYear: Int,
+        seasonBibs: Map<Pair<String, Int>, SeasonBibEntity>,
+        challengeResults: List<RaceResultEntity>
+    ): Pair<RunnerProfileEntity, Boolean> {
+        val sb = seasonBibs[profile.profileId to seasonYear]
+        val declared = sb != null && (sb.bib10km.isNotBlank() || sb.bib5km.isNotBlank())
+        if (declared) {
+            return profile.copy(defaultBib10km = sb!!.bib10km, defaultBib5km = sb.bib5km) to true
+        }
+        fun mostUsedBib(label: String): String = challengeResults
+            .filter { it.profileId == profile.profileId && it.seasonYear == seasonYear && it.distanceLabel == label }
+            .groupingBy { it.bibNumber }.eachCount()
+            .maxByOrNull { it.value }?.key.orEmpty()
+        return profile.copy(defaultBib10km = mostUsedBib("10 km"), defaultBib5km = mostUsedBib("5 km")) to false
+    }
+
+    private fun buildUiState(bundle: DataFlowsBundle, ctrl: ControlState): AlgUiState {
+        val today = LocalDate.now().toString()
+        val allRaces = bundle.allRaces.filter { it.seasonYear >= AlgRepository.FIRST_SEASON }
+        val horsIds = allRaces.filter { !it.isChallenge }.map { it.raceId }.toSet()
+        val challengeRaces = allRaces.filter { it.isChallenge }
+        val challengeResults = bundle.allResults.filter { it.raceId !in horsIds }
+        val horsResults = bundle.allResults.filter { it.raceId in horsIds }
         val allOverrides = bundle.allOverrides
         val allMetrics = bundle.allMetrics
         val allTerrainWeather = bundle.allTerrainWeather
-        val directory = bundle.directory
 
-        val availableSeasons = (repository.getAvailableSeasonsFrom2026() + allRaces.map { it.seasonYear })
-            .filter { it >= 2026 }
+        val availableSeasons = (repository.getAvailableSeasons() + allRaces.map { it.seasonYear })
+            .filter { it >= AlgRepository.FIRST_SEASON }
             .distinct()
             .sorted()
 
-        val activeSeasonYear = if (ctrl.selectedSeasonYear in availableSeasons) {
-            ctrl.selectedSeasonYear
-        } else {
-            availableSeasons.firstOrNull() ?: 2026
-        }
+        val autoSeason = challengeRaces.filter { it.dateIso <= today }.maxByOrNull { it.dateIso }?.seasonYear
+            ?: availableSeasons.lastOrNull() ?: LocalDate.now().year
+        val activeSeasonYear = ctrl.selectedSeasonYear?.takeIf { it in availableSeasons } ?: autoSeason
 
-        val activeProfile = profiles.find { it.profileId == ctrl.selectedProfileId }
-            ?: profiles.firstOrNull()
+        val seasonBibs = bundle.seasonBibs.associateBy { it.profileId to it.seasonYear }
+        val factorsByRace: Map<String, Map<String, Double>> = bundle.courseFactors
+            .groupBy { it.raceId }
+            .mapValues { (_, list) -> list.associate { it.distanceLabel to it.factor } }
+        val courseKeys = CourseDifficultyCalculator.courseKeys(allRaces)
+        val previousEditionByRaceId = allRaces.mapNotNull { race ->
+            CourseDifficultyCalculator.previousEdition(race, allRaces, courseKeys)?.let { race.raceId to it.raceId }
+        }.toMap()
+        val weatherByRaceId = bundle.raceWeather.associateBy { it.raceId }
 
-        val seasonRaces = allRaces.filter { it.seasonYear == activeSeasonYear }
-        val seasonResults = allResults.filter { it.seasonYear == activeSeasonYear }
-
-        val trioSummaries = profiles.associate { profile ->
-            profile.profileId to AlgChallengeCalculator.computeChallengeSummary(
-                profile = profile,
-                seasonYear = activeSeasonYear,
-                racesInSeason = seasonRaces,
-                allSeasonResults = seasonResults,
+        fun summaryFor(profile: RunnerProfileEntity, year: Int): RunnerChallengeSummary {
+            val (seasonProfile, _) = profileForSeason(profile, year, seasonBibs, challengeResults)
+            val seasonProfiles = bundle.profiles.map { profileForSeason(it, year, seasonBibs, challengeResults).first }
+            return AlgChallengeCalculator.computeChallengeSummary(
+                profile = seasonProfile,
+                seasonYear = year,
+                racesInSeason = challengeRaces.filter { it.seasonYear == year },
+                allSeasonResults = challengeResults.filter { it.seasonYear == year },
                 allActivityMetrics = allMetrics,
                 allTerrainWeather = allTerrainWeather,
                 allBibOverrides = allOverrides,
-                allProfiles = profiles
+                allProfiles = seasonProfiles,
+                courseFactors = factorsByRace,
+                previousEditionByRaceId = previousEditionByRaceId,
+                weatherByRaceId = weatherByRaceId
             )
         }
 
+        val summariesByProfileAndYear: Map<String, Map<Int, RunnerChallengeSummary>> =
+            bundle.profiles.associate { profile ->
+                profile.profileId to availableSeasons.associateWith { year -> summaryFor(profile, year) }
+            }
+
+        fun withFallbackForm(summary: RunnerChallengeSummary): RunnerChallengeSummary {
+            val previous = summariesByProfileAndYear[summary.profile.profileId]?.get(summary.seasonYear - 1)
+                ?: return summary
+            return summary.copy(
+                fallbackFormPace10km = SeasonInsightsCalculator.currentFormPace(SeasonInsightsCalculator.formPoints(previous, 10)),
+                fallbackFormPace5km = SeasonInsightsCalculator.currentFormPace(SeasonInsightsCalculator.formPoints(previous, 5))
+            )
+        }
+
+        val seasonProfilesWithFlag = bundle.profiles.map { profileForSeason(it, activeSeasonYear, seasonBibs, challengeResults) }
+        val profiles = seasonProfilesWithFlag.map { it.first }
+        val bibsDeclared = seasonProfilesWithFlag.associate { it.first.profileId to it.second }
+        val activeProfile = profiles.find { it.profileId == ctrl.selectedProfileId } ?: profiles.firstOrNull()
+
+        val trioSummaries = profiles.associate { profile ->
+            profile.profileId to withFallbackForm(summariesByProfileAndYear.getValue(profile.profileId).getValue(activeSeasonYear))
+        }
         val activeSummary = activeProfile?.let { trioSummaries[it.profileId] }
 
         val trioStandings = profiles.associate { profile ->
@@ -190,60 +276,93 @@ class AlgViewModel(
             }.toMap()
         }
 
-        val multiSeasonSummaries = if (activeProfile != null) {
-            availableSeasons.associateWith { year ->
-                AlgChallengeCalculator.computeChallengeSummary(
-                    profile = activeProfile,
-                    seasonYear = year,
-                    racesInSeason = allRaces.filter { it.seasonYear == year },
-                    allSeasonResults = allResults.filter { it.seasonYear == year },
-                    allActivityMetrics = allMetrics,
-                    allTerrainWeather = allTerrainWeather,
-                    allBibOverrides = allOverrides,
-                    allProfiles = profiles
-                )
-            }
-        } else emptyMap()
+        val multiSeasonSummaries = activeProfile?.let { summariesByProfileAndYear[it.profileId] }.orEmpty()
 
-        val activeSummaryForYearA = multiSeasonSummaries[2026]
-        val activeSummaryForYearB = multiSeasonSummaries[2027]
-        val validResultsForComparisons = buildList {
-            if (activeSummaryForYearA != null) {
-                activeSummaryForYearA.racesWithContext.forEach { item ->
-                    item.result10km?.let { add(it) }
-                    item.result5km?.let { add(it) }
-                }
-            }
-            if (activeSummaryForYearB != null) {
-                activeSummaryForYearB.racesWithContext.forEach { item ->
-                    item.result10km?.let { add(it) }
-                    item.result5km?.let { add(it) }
-                }
-            }
-        }
-
-        val comparisons2026Vs2027 = if (activeProfile != null) {
+        // Comparaison avec la saison précédente, parcours par parcours.
+        val yearB = activeSeasonYear
+        val yearA = activeSeasonYear - 1
+        val comparisons = if (activeProfile != null) {
+            val valid = listOfNotNull(multiSeasonSummaries[yearA], multiSeasonSummaries[yearB])
+                .flatMap { s -> s.racesWithContext.flatMap { listOfNotNull(it.result10km, it.result5km) } }
             AlgChallengeCalculator.buildSameCourseComparisons(
                 profileId = activeProfile.profileId,
                 distanceKm = ctrl.selectedChallengeDistanceKm,
-                seasonA = 2026,
-                seasonB = 2027,
-                allRaces = allRaces,
-                allResults = validResultsForComparisons
+                seasonA = yearA,
+                seasonB = yearB,
+                allRaces = challengeRaces,
+                allResults = valid
             )
         } else emptyList()
 
+        // Courses hors challenge de la saison, avec les résultats du Trio (ne comptent pas pour le challenge).
+        val horsItems = allRaces
+            .filter { !it.isChallenge && it.seasonYear == activeSeasonYear }
+            .sortedBy { it.dateIso }
+            .map { race ->
+                val forRace = horsResults.filter { it.raceId == race.raceId }
+                val mine = forRace.filter { it.profileId == activeProfile?.profileId }
+                RaceItemWithContext(
+                    race = race,
+                    gaumeGeo = GaumeInitialSeedData.resolveGaumeGeoForRace(race),
+                    result10km = mine.firstOrNull { it.distanceLabel == "10 km" },
+                    isCountingInTop15For10km = false,
+                    rankAmongRunnerRaces10km = null,
+                    pointsDeltaToEnterTop15For10km = null,
+                    result5km = mine.firstOrNull { it.distanceLabel == "5 km" },
+                    isCountingInTop15For5km = false,
+                    rankAmongRunnerRaces5km = null,
+                    pointsDeltaToEnterTop15For5km = null,
+                    resultsByProfileAndDistance = forRace.groupBy { it.profileId },
+                    activityMetrics = allMetrics.firstOrNull { it.raceId == race.raceId && it.profileId == activeProfile?.profileId },
+                    terrainWeather = allTerrainWeather.firstOrNull { it.raceId == race.raceId && it.profileId == activeProfile?.profileId },
+                    courseFactor10km = factorsByRace[race.raceId]?.get("10 km"),
+                    courseFactor5km = factorsByRace[race.raceId]?.get("5 km"),
+                    previousEditionRaceId = previousEditionByRaceId[race.raceId],
+                    weather = weatherByRaceId[race.raceId]
+                )
+            }
+
+        val passports = profiles.associate { p ->
+            p.profileId to SeasonInsightsCalculator.buildPassport(p.profileId, allRaces, bundle.allResults)
+        }
+        fun horsCount(profileId: String): Int =
+            horsItems.count { item -> item.resultsByProfileAndDistance[profileId].orEmpty().isNotEmpty() }
+
+        val trioRecaps = profiles.mapNotNull { p ->
+            val summary = trioSummaries[p.profileId] ?: return@mapNotNull null
+            val dist = when {
+                summary.challengeForDistance(p.preferredDistanceKm).completedRacesCount > 0 -> p.preferredDistanceKm
+                summary.challenge10km.completedRacesCount >= summary.challenge5km.completedRacesCount -> 10
+                else -> 5
+            }
+            p.profileId to SeasonInsightsCalculator.buildRecap(
+                summary = summary,
+                distanceKm = dist,
+                standing = trioStandings[p.profileId]?.get(dist),
+                passport = passports.getValue(p.profileId),
+                horsChallengeRaces = horsCount(p.profileId)
+            )
+        }.toMap()
+        val activeRecap = activeSummary?.let { s ->
+            SeasonInsightsCalculator.buildRecap(
+                summary = s,
+                distanceKm = ctrl.selectedChallengeDistanceKm,
+                standing = trioStandings[s.profile.profileId]?.get(ctrl.selectedChallengeDistanceKm),
+                passport = passports.getValue(s.profile.profileId),
+                horsChallengeRaces = horsCount(s.profile.profileId)
+            )
+        }
+
         val overridesByRaceAndProfile = allOverrides.groupBy { it.raceId }
             .mapValues { (_, list) -> list.associateBy { it.profileId } }
-
         val terrainWeatherByRaceAndProfile = allTerrainWeather.groupBy { it.raceId }
             .mapValues { (_, list) -> list.associateBy { it.profileId } }
 
         val filteredDirectory = if (ctrl.directorySearchQuery.isBlank()) {
-            directory
+            bundle.directory
         } else {
             val q = ctrl.directorySearchQuery.trim().lowercase()
-            directory.filter {
+            bundle.directory.filter {
                 it.fullName.lowercase().contains(q) ||
                     it.club.lowercase().contains(q) ||
                     it.myChronoRunnerId.lowercase().contains(q) ||
@@ -252,7 +371,7 @@ class AlgViewModel(
             }
         }
 
-        AlgUiState(
+        return AlgUiState(
             isLoading = profiles.isEmpty(),
             isSyncingMyChrono = ctrl.isSyncingMyChrono,
             selectedTab = ctrl.selectedTab,
@@ -269,24 +388,27 @@ class AlgViewModel(
             activeRunnerSummary = activeSummary,
             trioSeasonSummaries = trioSummaries,
             multiSeasonSummariesForActiveRunner = multiSeasonSummaries,
-            sameCourseComparisons2026Vs2027 = comparisons2026Vs2027,
+            sameCourseComparisons = comparisons,
+            comparisonYearA = yearA,
+            comparisonYearB = yearB,
             bibOverridesByRaceAndProfile = overridesByRaceAndProfile,
             terrainWeatherByRaceAndProfile = terrainWeatherByRaceAndProfile,
             directorySearchResults = filteredDirectory,
             directorySearchQuery = ctrl.directorySearchQuery,
             statusBannerMessage = ctrl.statusBannerMessage,
-            trioStandings = trioStandings
+            trioStandings = trioStandings,
+            horsChallengeItems = horsItems,
+            activePassport = activeProfile?.let { passports[it.profileId] },
+            trioRecaps = trioRecaps,
+            activeRecap = activeRecap,
+            seasonBibsDeclared = bibsDeclared
         )
-    }.stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5_000),
-        initialValue = AlgUiState()
-    )
+    }
 
     init {
         viewModelScope.launch {
             repository.ensureSeeded()
-            syncMyChronoSeason(2026)
+            syncMyChronoSeason()
         }
     }
 
@@ -328,12 +450,11 @@ class AlgViewModel(
     }
 
     fun selectSeasonYear(seasonYear: Int) {
-        val validYear = maxOf(2026, seasonYear)
+        val validYear = maxOf(AlgRepository.FIRST_SEASON, seasonYear)
         controlFlow.value = controlFlow.value.copy(selectedSeasonYear = validYear)
-        val hasRacesForYear = uiState.value.activeRunnerSummary?.racesWithContext?.isNotEmpty() == true
-        if (!hasRacesForYear) {
-            syncMyChronoSeason(validYear)
-        }
+        val hasRacesForYear = uiState.value.availableSeasons.contains(validYear) &&
+            uiState.value.multiSeasonSummariesForActiveRunner[validYear]?.racesWithContext?.isNotEmpty() == true
+        if (!hasRacesForYear) syncMyChronoSeason()
     }
 
     fun selectChallengeDistance(distanceKm: Int) {
@@ -365,42 +486,39 @@ class AlgViewModel(
         controlFlow.value = controlFlow.value.copy(directorySearchQuery = query)
     }
 
-    fun syncMyChronoSeason(seasonYear: Int = controlFlow.value.selectedSeasonYear) {
+    /** Synchronise toutes les saisons (seules les courses nouvelles ou récentes sont téléchargées). */
+    fun syncMyChronoSeason(@Suppress("UNUSED_PARAMETER") seasonYear: Int? = null) {
         if (controlFlow.value.isSyncingMyChrono) return
-        val targetYear = maxOf(2026, seasonYear)
         viewModelScope.launch {
             controlFlow.value = controlFlow.value.copy(
                 isSyncingMyChrono = true,
-                statusBannerMessage = "Synchronisation MyChrono $targetYear (10 km & 5 km séparés)…"
+                statusBannerMessage = "Synchronisation MyChrono…"
             )
-            val result = repository.syncSeasonFromMyChrono(targetYear)
-            val msg = result.fold(
-                onSuccess = { it },
-                onFailure = { "MyChrono $targetYear indisponible : ${it.message}" }
-            )
+            val result = repository.syncAll()
             controlFlow.value = controlFlow.value.copy(
                 isSyncingMyChrono = false,
-                statusBannerMessage = msg
+                statusBannerMessage = result.fold(
+                    onSuccess = { it },
+                    onFailure = { "MyChrono indisponible : ${it.message}" }
+                )
             )
         }
     }
 
     fun purgeAndResyncCleanResults() {
         if (controlFlow.value.isSyncingMyChrono) return
-        val targetYear = maxOf(2026, controlFlow.value.selectedSeasonYear)
         viewModelScope.launch {
             controlFlow.value = controlFlow.value.copy(
                 isSyncingMyChrono = true,
-                statusBannerMessage = "Purge des résultats sans dossard et re-synchronisation MyChrono $targetYear…"
+                statusBannerMessage = "Téléchargement complet des classements MyChrono…"
             )
-            val result = repository.resetAndResyncCleanResults(targetYear)
-            val msg = result.fold(
-                onSuccess = { "Résultats re-synchronisés • $it" },
-                onFailure = { "Données nettoyées • ${it.message}" }
-            )
+            val result = repository.resetAndResyncCleanResults()
             controlFlow.value = controlFlow.value.copy(
                 isSyncingMyChrono = false,
-                statusBannerMessage = msg
+                statusBannerMessage = result.fold(
+                    onSuccess = { "Tout est recalculé • $it" },
+                    onFailure = { "MyChrono indisponible : ${it.message}" }
+                )
             )
         }
     }
@@ -415,6 +533,7 @@ class AlgViewModel(
         clubName: String,
         categoryLabel: String
     ) {
+        val season = uiState.value.selectedSeasonYear
         viewModelScope.launch {
             val cleanBib10 = defaultBib10km.trim().removePrefix("#")
             val cleanBib5 = defaultBib5km.trim().removePrefix("#")
@@ -429,10 +548,11 @@ class AlgViewModel(
             controlFlow.value = controlFlow.value.copy(
                 isSyncingMyChrono = true,
                 selectedChallengeDistanceKm = if (controlFlow.value.selectedProfileId == profileId) nextDist else controlFlow.value.selectedChallengeDistanceKm,
-                statusBannerMessage = "Enregistrement des dossards (10 km / 5 km) et mise à jour MyChrono…"
+                statusBannerMessage = "Enregistrement des dossards $season…"
             )
             val res = repository.updateProfileBibAndDistance(
                 profileId = profileId,
+                seasonYear = season,
                 newDisplayName = displayName,
                 newMyChronoId = myChronoId,
                 defaultBib10km = cleanBib10,
@@ -441,13 +561,12 @@ class AlgViewModel(
                 clubName = clubName,
                 categoryLabel = categoryLabel
             )
-            val msg = res.fold(
-                onSuccess = { "Dossards mis à jour • $it" },
-                onFailure = { "Dossards enregistrés • ${it.message}" }
-            )
             controlFlow.value = controlFlow.value.copy(
                 isSyncingMyChrono = false,
-                statusBannerMessage = msg
+                statusBannerMessage = res.fold(
+                    onSuccess = { "Dossards $season enregistrés • $it" },
+                    onFailure = { "Dossards $season enregistrés • ${it.message}" }
+                )
             )
         }
     }
@@ -462,7 +581,7 @@ class AlgViewModel(
             controlFlow.value = controlFlow.value.copy(
                 isSyncingMyChrono = true,
                 selectedChallengeDistanceKm = if (distanceKm == 5) 5 else 10,
-                statusBannerMessage = "Recherche du dossard #$bibNumber ($distanceKm km) dans MyChrono…"
+                statusBannerMessage = "Recherche du dossard #$bibNumber dans MyChrono…"
             )
             val res = repository.setRaceBibAndDistanceAndSync(
                 raceId = raceId,
@@ -470,13 +589,12 @@ class AlgViewModel(
                 bibNumber = bibNumber,
                 distanceKm = distanceKm
             )
-            val msg = res.fold(
-                onSuccess = { it },
-                onFailure = { it.message ?: "Aucun résultat trouvé pour ce dossard." }
-            )
             controlFlow.value = controlFlow.value.copy(
                 isSyncingMyChrono = false,
-                statusBannerMessage = msg
+                statusBannerMessage = res.fold(
+                    onSuccess = { it },
+                    onFailure = { it.message ?: "Aucun résultat trouvé pour ce dossard." }
+                )
             )
         }
     }
@@ -485,8 +603,6 @@ class AlgViewModel(
         raceId: String,
         profileId: String,
         terrainCondition: String,
-        weatherCondition: String,
-        temperatureC: Int?,
         terrainNotes: String,
         isPlannedForSimulator: Boolean,
         plannedDistanceKm: Int,
@@ -496,9 +612,6 @@ class AlgViewModel(
             repository.saveRaceTerrainWeather(
                 raceId = raceId,
                 profileId = profileId,
-                seasonYear = controlFlow.value.selectedSeasonYear,
-                weatherCondition = weatherCondition,
-                temperatureC = temperatureC,
                 terrainCondition = terrainCondition,
                 isPlannedForSimulator = isPlannedForSimulator,
                 plannedDistanceKm = plannedDistanceKm,
@@ -506,7 +619,7 @@ class AlgViewModel(
                 runnerNotes = terrainNotes
             )
             controlFlow.value = controlFlow.value.copy(
-                statusBannerMessage = "Météo ($weatherCondition) & Terrain ($terrainCondition) enregistrés."
+                statusBannerMessage = if (terrainCondition.isBlank()) "Notes enregistrées." else "Terrain « $terrainCondition » enregistré."
             )
         }
     }
@@ -522,7 +635,6 @@ class AlgViewModel(
             repository.togglePlannedRaceForSimulator(
                 raceId = raceId,
                 profileId = profileId,
-                seasonYear = controlFlow.value.selectedSeasonYear,
                 distanceKm = distanceKm,
                 isPlanned = isPlanned,
                 defaultTargetPoints = targetPoints

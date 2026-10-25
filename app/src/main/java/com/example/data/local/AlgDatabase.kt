@@ -17,13 +17,19 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ActivityMetricsEntity::class,
         RaceTerrainWeatherEntity::class,
         MyChronoDirectoryEntry::class,
-        ChallengeStandingEntity::class
+        ChallengeStandingEntity::class,
+        SeasonBibEntity::class,
+        MyChronoRowEntity::class,
+        RaceFetchStateEntity::class,
+        CourseFactorEntity::class,
+        RaceWeatherEntity::class
     ],
-    version = 7,
+    version = 8,
     // Le schéma de chaque version est enregistré dans app/schemas (commité par le build GitHub).
     // Chaque montée de version passe par une migration qui conserve dossards, résultats, GPX et notes.
     autoMigrations = [
-        AutoMigration(from = 6, to = 7, spec = AlgDatabase.CleanInventedDataSpec::class)
+        AutoMigration(from = 6, to = 7, spec = AlgDatabase.CleanInventedDataSpec::class),
+        AutoMigration(from = 7, to = 8, spec = AlgDatabase.SeasonBibsSpec::class)
     ],
     exportSchema = true
 )
@@ -37,6 +43,18 @@ abstract class AlgDatabase : RoomDatabase() {
     class CleanInventedDataSpec : AutoMigrationSpec {
         override fun onPostMigrate(db: SupportSQLiteDatabase) {
             AlgDatabase.cleanInventedData(db)
+        }
+    }
+
+    /**
+     * Migration 7 → 8 : les dossards du profil deviennent les dossards de la saison 2026.
+     * Le calendrier 2026, qui a pu être mélangé avec les courses « Hors challenge » (même numéro),
+     * est entièrement remplacé à la première synchro ; résultats, GPX et notes restent rattachés
+     * à l'identifiant de la manche.
+     */
+    class SeasonBibsSpec : AutoMigrationSpec {
+        override fun onPostMigrate(db: SupportSQLiteDatabase) {
+            AlgDatabase.copyProfileBibsToSeason2026(db)
         }
     }
 
@@ -61,6 +79,14 @@ abstract class AlgDatabase : RoomDatabase() {
                     .build()
                     .also { INSTANCE = it }
             }
+        }
+
+        fun copyProfileBibsToSeason2026(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                "INSERT OR REPLACE INTO season_bibs (profileId, seasonYear, bib10km, bib5km) " +
+                    "SELECT profileId, 2026, defaultBib10km, defaultBib5km FROM runner_profiles " +
+                    "WHERE defaultBib10km != '' OR defaultBib5km != ''"
+            )
         }
 
         fun cleanInventedData(db: SupportSQLiteDatabase) {

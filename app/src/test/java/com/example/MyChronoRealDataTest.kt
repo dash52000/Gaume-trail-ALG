@@ -39,6 +39,14 @@ class MyChronoRealDataTest {
              {"id":4,"label":"10 km","kind":"adult","length":9800,"real":9800,"effective":9800},
              {"id":5,"label":"5 km","kind":"adult","length":4800,"real":4800,"effective":4800},
              {"id":6,"label":"Jeunes","kind":"kids","length":1000,"real":null,"effective":1000}]},
+          {"id":107,"competitionId":25,"competition":"Hors challenge ALG 2026","org":"ALG","orgId":1,"kind":"single",
+           "year":2026,"num":1,"date":"2026-01-04","place":"Suxy","name":"Lu Raid Adjalé",
+           "info":{"address":"Salle du Val d'Eau","schedule":"10h00 – 14 km · 10h15 – 7 km","terrain":"Prairie, forêt.","maps":[]},
+           "status":"planned","published":false,"entries":0,"finishers":0,
+           "distances":[
+             {"id":75,"label":"14 km","kind":"adult","length":14000,"real":null,"effective":14000,"noTime":false},
+             {"id":86,"label":"7 km","kind":"adult","length":7000,"real":null,"effective":7000,"noTime":false},
+             {"id":87,"label":"Marche","kind":"adult","length":8000,"real":null,"effective":8000,"noTime":true}]},
           {"id":41,"year":2026,"num":41,"date":"2026-10-18","place":"Virton","name":"Le Jogging du TT Virton",
            "info":{"lat":49.56597079010033,"lng":5.537617074928778},
            "status":"closed","published":true,
@@ -83,9 +91,75 @@ class MyChronoRealDataTest {
     private val laetitia = profiles.first { it.profileId == "laetitia" }
     private val elodie = profiles.first { it.profileId == "elodie" }
 
+    /** Extrait d'un classement hors challenge (format identique, distances propres à la course). */
+    private val horsChallengeResultsJson = """
+        {"race":{"id":107,"num":1,"place":"Suxy","status":"closed",
+           "distances":[
+             {"id":75,"label":"14 km","kind":"adult","effective":14000},
+             {"id":86,"label":"7 km","kind":"adult","effective":7000}]},
+         "results":[
+           {"distanceId":75,"rows":[
+             {"rank":40,"bib":12,"name":"COLLET Damien","sex":"M","cat":"S","catRank":15,"club":"","city":"",
+              "time":4380040,"status":"finished","points":1161,"runnerId":1171}]},
+           {"distanceId":86,"rows":[
+             {"rank":20,"bib":13,"name":"LAETITIA","sex":"F","cat":"F","catRank":5,"club":"","city":"",
+              "time":2700020,"status":"finished","points":1181,"runnerId":1202}]}
+         ]}
+    """.trimIndent()
+
+    @Test
+    fun horsChallenge_neverOverwritesAChallengeRound() {
+        val races = client.parseRacesPayload(racesJson, 2026)
+        assertEquals(4, races.size)
+        assertEquals(4, races.map { it.raceId }.toSet().size) // aucun identifiant en double
+
+        val manche1 = races.first { it.isChallenge && it.roundNumber == 1 }
+        assertEquals("alg_2026_r01", manche1.raceId)
+        assertEquals("Virton", manche1.village)
+
+        val hc = races.single { !it.isChallenge }
+        assertEquals("alg_2026_h01", hc.raceId)
+        assertEquals("Suxy", hc.village)
+        assertEquals("Hors challenge ALG 2026", hc.competitionLabel)
+        assertEquals("14 km", hc.longDistanceLabel)
+        assertEquals("7 km", hc.shortDistanceLabel)
+        assertEquals(14.0, hc.distanceKm, 0.001)
+        assertEquals(7.0, hc.distance5Km!!, 0.001)
+        assertFalse(hc.isCompleted)
+    }
+
+    @Test
+    fun horsChallenge_resultsAreFoundButNeverCount() {
+        val rows = client.parseResultsPayload(horsChallengeResultsJson, isChallenge = false)
+        assertEquals(2, rows.size)
+        val d = client.findMatchingResultsForProfile("alg_2026_h01", 2026, damien, null, rows, isChallenge = false)
+        assertEquals(1, d.size)
+        assertEquals("14 km", d.single().distanceName)
+        assertEquals(14.0, d.single().distanceKm!!, 0.001)
+        assertEquals(0, d.single().challengePoints) // ne compte pas pour le challenge
+        assertEquals("1:13:00", d.single().officialTimeFormatted)
+
+        val l = client.findMatchingResultsForProfile("alg_2026_h01", 2026, laetitia, null, rows, isChallenge = false)
+        assertEquals("7 km", l.single().distanceName)
+
+        // Le dossard de la saison n'est jamais utilisé hors challenge (il n'y est pas valable).
+        val sansId = damien.copy(myChronoRunnerId = "")
+        assertTrue(client.findMatchingResultsForProfile("alg_2026_h01", 2026, sansId, null, rows, isChallenge = false).isEmpty())
+    }
+
+    @Test
+    fun undeclaredSeason_matchesByMyChronoIdOnly() {
+        val rows = client.parseResultsPayload(race41ResultsJson)
+        val noBibs = laetitia.copy(defaultBib10km = "", defaultBib5km = "")
+        val l = client.findMatchingResultsForProfile("alg_2025_r41", 2025, noBibs, null, rows, seasonBibsDeclared = false)
+        assertEquals("5 km", l.single().distanceLabel)
+        // Même profil, saison où les dossards sont déclarés : sans dossard, rien n'est compté.
+        assertTrue(client.findMatchingResultsForProfile("alg_2026_r41", 2026, noBibs, null, rows).isEmpty())
+    }
+
     @Test
     fun races_useOnlyPublishedData() {
-        val races = client.parseRacesPayload(racesJson, 2026)
+        val races = client.parseRacesPayload(racesJson, 2026).filter { it.isChallenge }
         assertEquals(3, races.size)
 
         val r1 = races.first { it.roundNumber == 1 }

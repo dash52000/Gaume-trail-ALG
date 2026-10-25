@@ -7,13 +7,14 @@ import com.example.data.local.RaceBibOverrideEntity
 import com.example.data.local.RaceEntity
 import com.example.data.local.RaceResultEntity
 import com.example.data.local.RaceTerrainWeatherEntity
+import com.example.data.local.RaceWeatherEntity
 import com.example.data.local.RunnerProfileEntity
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.roundToInt
 
 /**
- * Élément de course combiné pour une saison (>= 2026), avec séparation stricte
+ * Élément de course combiné pour une saison, avec séparation stricte
  * entre le résultat 10 km et le résultat 5 km, la météo/terrain, la sélection Simulateur Top 15
  * et la géolocalisation GPS exacte en Gaume.
  */
@@ -30,7 +31,16 @@ data class RaceItemWithContext(
     val pointsDeltaToEnterTop15For5km: Int?,
     val resultsByProfileAndDistance: Map<String, List<RaceResultEntity>>,
     val activityMetrics: ActivityMetricsEntity?,
-    val terrainWeather: RaceTerrainWeatherEntity?
+    val terrainWeather: RaceTerrainWeatherEntity?,
+    /** Indice de difficulté du parcours (calculé sur le peloton), par distance ; null si inconnu. */
+    val courseFactor10km: Double? = null,
+    val courseFactor5km: Double? = null,
+    /** Même parcours la saison précédente (clé lieu + rang dans la saison). */
+    val previousEditionRaceId: String? = null,
+    val previousEditionFactor10km: Double? = null,
+    val previousEditionFactor5km: Double? = null,
+    /** Météo réelle au départ (Open-Meteo). */
+    val weather: RaceWeatherEntity? = null
 ) {
     val myResult10km: RaceResultEntity? = result10km
     val myResult5km: RaceResultEntity? = result5km
@@ -47,6 +57,16 @@ data class RaceItemWithContext(
 
     fun pointsDeltaForDistance(distanceKm: Int): Int? =
         if (distanceKm == 5) pointsDeltaToEnterTop15For5km else pointsDeltaToEnterTop15For10km
+
+    fun courseFactorForDistance(distanceKm: Int): Double? =
+        if (distanceKm == 5) courseFactor5km else courseFactor10km
+
+    fun previousEditionFactorForDistance(distanceKm: Int): Double? =
+        if (distanceKm == 5) previousEditionFactor5km else previousEditionFactor10km
+
+    /** Indice de ce parcours : celui de la course elle-même, sinon celui de son édition précédente. */
+    fun bestKnownFactorForDistance(distanceKm: Int): Double? =
+        courseFactorForDistance(distanceKm) ?: previousEditionFactorForDistance(distanceKm)
 }
 
 data class SimulatedRaceCandidate(
@@ -105,109 +125,13 @@ data class DistanceChallengeSummary(
     val elevationKnownRacesCount: Int,
     val current15thRaceThresholdPoints: Int?,
     val top15RaceIds: Set<String>,
-    val simulatorSummary: Top15SimulationSummary,
-    val conquestSummary: GaumeConquestSummary
+    val simulatorSummary: Top15SimulationSummary
 ) {
     val countingRaceIds: Set<String> get() = top15RaceIds
 }
 
 /**
- * Progression d'un des fiefs (territoires du jeu, découpés sur les lieux réels des manches).
- */
-data class GaumeTerritoryConquestProgress(
-    val territoryId: String,
-    val title: String,
-    val subtitle: String,
-    val badgeTitle: String,
-    val colorHex: Long,
-    val conqueredRacesCount: Int,
-    val totalRacesInTerritory: Int,
-    val isTerritoryConquered: Boolean,
-    val isFullyMastered: Boolean,
-    val villagesConqueredNames: List<String>,
-    val villagesRemainingNames: List<String>
-)
-
-/**
- * Badge de terroir ou trophée de gamification en Gaume.
- */
-data class GaumeBadgeItem(
-    val badgeId: String,
-    val title: String,
-    val description: String,
-    val categoryLabel: String,
-    val isUnlocked: Boolean,
-    val progressText: String,
-    val accentColorHex: Long
-)
-
-/**
- * 1) Série de régularité (Streak) et Bonus de fidélité Gaumaise.
- */
-data class GaumeStreakSummary(
-    val currentStreakRaces: Int,
-    val bestStreakRaces: Int,
-    val loyaltyMultiplier: Double,
-    val loyaltyTierTitle: String,
-    val bonusLoyaltyXp: Int,
-    val nextMilestoneRaces: Int
-)
-
-/**
- * 2) Défi ou Quête du Trio en Gaume (Damien, Laetitia, Élodie).
- */
-data class GaumeTrioQuestProgress(
-    val questId: String,
-    val title: String,
-    val description: String,
-    val categoryTag: String, // "TRIO", "RÉGULARITÉ", "TERROIR", "PASSEPORT"
-    val currentProgress: Int,
-    val targetProgress: Int,
-    val rewardXp: Int,
-    val isCompleted: Boolean,
-    val accentColorHex: Long
-)
-
-/**
- * 3) Tampon de village dans le Passeport Collector de Gaume (élément du jeu).
- */
-data class GaumeVillageStampItem(
-    val raceId: String,
-    val roundNumber: Int,
-    val villageName: String,
-    val raceTitle: String,
-    val dateIso: String,
-    val territoryId: String,
-    val territoryName: String,
-    val territoryColorHex: Long,
-    val isStamped: Boolean,
-    val stampedBib: String?,
-    val stampedTimeFormatted: String?,
-    val stampedPoints: Int?,
-    val stampedRank: Int?,
-    val stampedDistanceLabel: String?
-)
-
-/**
- * Résumé complet de la Conquête de Gaume, Série (Streak), Quêtes du Trio, Passeport Collector & Badges.
- */
-data class GaumeConquestSummary(
-    val conqueredVillagesCount: Int,
-    val totalVillagesInSeason: Int,
-    val territoriesConqueredCount: Int,
-    val totalTerritoriesCount: Int,
-    val xpPoints: Int,
-    val runnerLevel: Int,
-    val runnerRankTitle: String,
-    val streakSummary: GaumeStreakSummary,
-    val trioQuests: List<GaumeTrioQuestProgress>,
-    val passportStamps: List<GaumeVillageStampItem>,
-    val territories: List<GaumeTerritoryConquestProgress>,
-    val badges: List<GaumeBadgeItem>
-)
-
-/**
- * Résumé complet d'un coureur pour une saison (>= 2026) avec les deux classements séparés :
+ * Résumé complet d'un coureur pour une saison avec les deux classements séparés :
  * - challenge10km : Challenge 10 km (Allure Libre Longue)
  * - challenge5km  : Challenge 5 km (Allure Libre Courte)
  */
@@ -218,12 +142,16 @@ data class RunnerChallengeSummary(
     val challenge5km: DistanceChallengeSummary,
     val totalDistanceRunKmAllDistances: Double,
     val totalElevationGainMAllDistances: Int,
-    val racesWithContext: List<RaceItemWithContext>
+    val racesWithContext: List<RaceItemWithContext>,
+    /** Forme de fin de saison précédente (allure corrigée du parcours, s/km), pour les premiers pronostics. */
+    val fallbackFormPace10km: Int? = null,
+    val fallbackFormPace5km: Int? = null
 ) {
+    fun fallbackFormPaceForDistance(distanceKm: Int): Int? =
+        if (distanceKm == 5) fallbackFormPace5km else fallbackFormPace10km
+
     val simulator10km: Top15SimulationSummary get() = challenge10km.simulatorSummary
     val simulator5km: Top15SimulationSummary get() = challenge5km.simulatorSummary
-    val conquest10km: GaumeConquestSummary get() = challenge10km.conquestSummary
-    val conquest5km: GaumeConquestSummary get() = challenge5km.conquestSummary
 
     fun challengeForDistance(distanceKm: Int): DistanceChallengeSummary =
         if (distanceKm == 5) challenge5km else challenge10km
@@ -234,12 +162,10 @@ data class RunnerChallengeSummary(
     fun simulatorForDistance(distanceKm: Int): Top15SimulationSummary =
         challengeForDistance(distanceKm).simulatorSummary
 
-    fun conquestForDistance(distanceKm: Int): GaumeConquestSummary =
-        challengeForDistance(distanceKm).conquestSummary
 }
 
 /**
- * Comparaison inter-saisons (ex: 2026 vs 2027) sur une même course et une même distance.
+ * Comparaison inter-saisons (ex: 2025 vs 2026) sur un même parcours et une même distance.
  */
 data class SameCourseYearComparison(
     val courseTitle: String,
@@ -250,7 +176,8 @@ data class SameCourseYearComparison(
     val yearB: Int,
     val resultSeasonB: RaceResultEntity?,
     val timeDeltaSeconds: Int?,
-    val pointsDelta: Int?
+    val pointsDelta: Int?,
+    val sortDateIso: String = ""
 )
 
 object AlgChallengeCalculator {
@@ -272,7 +199,12 @@ object AlgChallengeCalculator {
         allActivityMetrics: List<ActivityMetricsEntity>,
         allTerrainWeather: List<RaceTerrainWeatherEntity> = emptyList(),
         allBibOverrides: List<RaceBibOverrideEntity> = emptyList(),
-        allProfiles: List<RunnerProfileEntity> = emptyList()
+        allProfiles: List<RunnerProfileEntity> = emptyList(),
+        /** raceId → ("10 km" / "5 km" → indice du parcours). */
+        courseFactors: Map<String, Map<String, Double>> = emptyMap(),
+        /** raceId → raceId de l'édition précédente du même parcours. */
+        previousEditionByRaceId: Map<String, String> = emptyMap(),
+        weatherByRaceId: Map<String, RaceWeatherEntity> = emptyMap()
     ): RunnerChallengeSummary {
         val profilesById = allProfiles.associateBy { it.profileId }
         val overridesByProfileAndRace = allBibOverrides.groupBy { it.profileId }
@@ -352,8 +284,7 @@ object AlgChallengeCalculator {
             racesWithGeo = racesWithGeo,
             distanceResults = results10km,
             terrainWeatherByRaceId = terrainWeatherByRaceId,
-            metricsByRaceId = metricsByRaceId,
-            allSeasonResultsAllRunners = cleanAllSeasonResults
+            metricsByRaceId = metricsByRaceId
         )
 
         val summary5km = computeDistanceChallenge(
@@ -364,8 +295,7 @@ object AlgChallengeCalculator {
             racesWithGeo = racesWithGeo,
             distanceResults = results5km,
             terrainWeatherByRaceId = terrainWeatherByRaceId,
-            metricsByRaceId = metricsByRaceId,
-            allSeasonResultsAllRunners = cleanAllSeasonResults
+            metricsByRaceId = metricsByRaceId
         )
 
         val allResultsByRaceAndProfile = cleanAllSeasonResults
@@ -398,7 +328,13 @@ object AlgChallengeCalculator {
                 pointsDeltaToEnterTop15For5km = delta5,
                 resultsByProfileAndDistance = allResultsByRaceAndProfile[race.raceId].orEmpty(),
                 activityMetrics = metricsByRaceId[race.raceId],
-                terrainWeather = terrainWeatherByRaceId[race.raceId]
+                terrainWeather = terrainWeatherByRaceId[race.raceId],
+                courseFactor10km = courseFactors[race.raceId]?.get("10 km"),
+                courseFactor5km = courseFactors[race.raceId]?.get("5 km"),
+                previousEditionRaceId = previousEditionByRaceId[race.raceId],
+                previousEditionFactor10km = previousEditionByRaceId[race.raceId]?.let { courseFactors[it]?.get("10 km") },
+                previousEditionFactor5km = previousEditionByRaceId[race.raceId]?.let { courseFactors[it]?.get("5 km") },
+                weather = weatherByRaceId[race.raceId]
             )
         }
 
@@ -423,7 +359,8 @@ object AlgChallengeCalculator {
      * sinon déduite du temps et de la vitesse officiels (eux-mêmes calculés sur la longueur réelle).
      */
     fun realKmOfResult(result: RaceResultEntity, race: RaceEntity?, distanceKm: Int): Double =
-        race?.realDistanceKmFor(distanceKm)
+        result.distanceKm?.takeIf { it > 0.0 }
+            ?: race?.realDistanceKmFor(distanceKm)
             ?: (result.speedKmh * result.officialTimeSeconds / 3600.0)
 
     /** D+ connu d'une manche courue : trace GPX importée, sinon D+ publié pour la manche (10 km). */
@@ -438,8 +375,7 @@ object AlgChallengeCalculator {
         racesWithGeo: List<Pair<RaceEntity, GaumeVillageGeo>>,
         distanceResults: List<RaceResultEntity>,
         terrainWeatherByRaceId: Map<String, RaceTerrainWeatherEntity>,
-        metricsByRaceId: Map<String, ActivityMetricsEntity>,
-        allSeasonResultsAllRunners: List<RaceResultEntity>
+        metricsByRaceId: Map<String, ActivityMetricsEntity>
     ): DistanceChallengeSummary {
         val validResults = if (hasAssignedBib) distanceResults else emptyList()
         val raceById = racesWithGeo.associate { it.first.raceId to it.first }
@@ -501,9 +437,9 @@ object AlgChallengeCalculator {
         // Objectif par défaut du simulateur : ta moyenne réelle de points (0 tant qu'aucune course n'est courue).
         val defaultTargetPts = avgPointsInt
 
-        // Candidats du Simulateur Top 15 (courses non encore courues sur cette distance)
+        // Candidats du Simulateur Top 15 : manches à venir (une manche passée et close n'est plus courable).
         val candidateRaces = racesWithGeo
-            .filter { it.first.raceId !in completedRaceIds }
+            .filter { it.first.raceId !in completedRaceIds && !it.first.isCompleted }
             .map { (race, _) ->
                 val tw = terrainWeatherByRaceId[race.raceId]
                 val isPlanned = tw?.isPlannedForSimulator == true && tw.plannedDistanceKm == distanceKm
@@ -512,7 +448,7 @@ object AlgChallengeCalculator {
                     race = race,
                     isPlanned = isPlanned,
                     targetPoints = targetPts,
-                    terrainCondition = tw?.terrainCondition
+                    terrainCondition = tw?.terrainCondition?.ifBlank { null }
                 )
             }
 
@@ -545,15 +481,6 @@ object AlgChallengeCalculator {
             plannedRaceIdsCountingInProjectedTop15 = top15Sim.filter { it.isPlanned }.map { it.raceId }.toSet()
         )
 
-        val conquestSummary = computeGaumeConquestSummary(
-            racesWithGeo = racesWithGeo,
-            completedRaceIds = completedRaceIds,
-            resultsByRaceId = validResults.associateBy { it.raceId },
-            countingCount = countingCount,
-            terrainWeatherByRaceId = terrainWeatherByRaceId,
-            allSeasonResultsAllRunners = allSeasonResultsAllRunners
-        )
-
         return DistanceChallengeSummary(
             distanceKm = distanceKm,
             distanceLabel = distanceLabel,
@@ -577,279 +504,14 @@ object AlgChallengeCalculator {
             elevationKnownRacesCount = knownElevations.size,
             current15thRaceThresholdPoints = threshold15th,
             top15RaceIds = top15RaceIds,
-            simulatorSummary = simulatorSummary,
-            conquestSummary = conquestSummary
+            simulatorSummary = simulatorSummary
         )
     }
 
-    private fun computeGaumeConquestSummary(
-        racesWithGeo: List<Pair<RaceEntity, GaumeVillageGeo>>,
-        completedRaceIds: Set<String>,
-        resultsByRaceId: Map<String, RaceResultEntity>,
-        countingCount: Int,
-        terrainWeatherByRaceId: Map<String, RaceTerrainWeatherEntity>,
-        allSeasonResultsAllRunners: List<RaceResultEntity>
-    ): GaumeConquestSummary {
-        val territoryColorById = GaumeInitialSeedData.gaumeTerritories.associate { it.territoryId to it.colorHex }
-
-        val territoriesProgress = GaumeInitialSeedData.gaumeTerritories.map { def ->
-            val racesInTerritory = racesWithGeo.filter { it.second.territoryId == def.territoryId }
-            val conqueredInTerritory = racesInTerritory.filter { it.first.raceId in completedRaceIds }
-            val remainingInTerritory = racesInTerritory.filter { it.first.raceId !in completedRaceIds }
-
-            val conqueredVillages = conqueredInTerritory.map { it.second.canonicalVillage }.distinct()
-            val remainingVillages = remainingInTerritory.map { it.second.canonicalVillage }.distinct()
-
-            GaumeTerritoryConquestProgress(
-                territoryId = def.territoryId,
-                title = def.title,
-                subtitle = def.subtitle,
-                badgeTitle = def.badgeTitle,
-                colorHex = def.colorHex,
-                conqueredRacesCount = conqueredInTerritory.size,
-                totalRacesInTerritory = racesInTerritory.size,
-                isTerritoryConquered = conqueredInTerritory.isNotEmpty(),
-                isFullyMastered = racesInTerritory.isNotEmpty() && conqueredInTerritory.size == racesInTerritory.size,
-                villagesConqueredNames = conqueredVillages,
-                villagesRemainingNames = remainingVillages
-            )
-        }
-
-        val conqueredVillagesTotal = racesWithGeo
-            .filter { it.first.raceId in completedRaceIds }
-            .map { it.second.canonicalVillage }
-            .distinct()
-            .size
-        val totalVillagesSeason = racesWithGeo
-            .map { it.second.canonicalVillage }
-            .distinct()
-            .size
-
-        val conqueredTerritoriesCount = territoriesProgress.count { it.isTerritoryConquered }
-        val totalTerritoriesCount = territoriesProgress.size
-
-        // 1) Série de régularité (Streak) & Bonus de fidélité
-        var currentStreak = 0
-        var bestStreak = 0
-        var runningStreak = 0
-        val sortedRaces = racesWithGeo.map { it.first }.sortedBy { it.roundNumber }
-        for (race in sortedRaces) {
-            if (race.raceId in completedRaceIds) {
-                runningStreak += 1
-                if (runningStreak > bestStreak) bestStreak = runningStreak
-            } else {
-                runningStreak = 0
-            }
-        }
-        val completedRoundsSorted = sortedRaces.filter { it.raceId in completedRaceIds }.map { it.roundNumber }
-        if (completedRoundsSorted.isNotEmpty()) {
-            currentStreak = 1
-            for (idx in completedRoundsSorted.size - 1 downTo 1) {
-                if (completedRoundsSorted[idx] - completedRoundsSorted[idx - 1] == 1) {
-                    currentStreak += 1
-                } else {
-                    break
-                }
-            }
-            if (currentStreak > bestStreak) bestStreak = currentStreak
-        }
-
-        val completedTotal = completedRaceIds.size
-        val (loyaltyMultiplier, loyaltyTitle, nextMilestone) = when {
-            bestStreak >= 5 || completedTotal >= 10 -> Triple(2.0, "Légende d'Orval (x2.0)", 15)
-            bestStreak >= 3 || completedTotal >= 5 -> Triple(1.5, "Pilier de la Semois (x1.5)", 10)
-            bestStreak >= 2 || completedTotal >= 2 -> Triple(1.2, "Fidèle des Sentiers (x1.2)", 5)
-            else -> Triple(1.0, "Éclaireur de Gaume (x1.0)", 2)
-        }
-
-        val muddyRacesCompleted = completedRaceIds.count { raceId ->
-            val cond = terrainWeatherByRaceId[raceId]?.terrainCondition.orEmpty()
-            cond.equals("Boueux", ignoreCase = true) || cond.equals("Très gras", ignoreCase = true)
-        }
-
-        // 2) Passeport Collector de Gaume (Tampons Officiels par village)
-        val passportStamps = racesWithGeo.map { (race, geo) ->
-            val res = resultsByRaceId[race.raceId]
-            GaumeVillageStampItem(
-                raceId = race.raceId,
-                roundNumber = race.roundNumber,
-                villageName = geo.canonicalVillage,
-                raceTitle = race.title,
-                dateIso = race.dateIso,
-                territoryId = geo.territoryId,
-                territoryName = geo.territoryName,
-                territoryColorHex = territoryColorById[geo.territoryId] ?: 0xFF1B5E3A,
-                isStamped = res != null,
-                stampedBib = res?.bibNumber,
-                stampedTimeFormatted = res?.officialTimeFormatted,
-                stampedPoints = res?.challengePoints,
-                stampedRank = res?.overallRank,
-                stampedDistanceLabel = res?.distanceLabel
-            )
-        }
-
-        // 3) Défis et Quêtes du Trio en Gaume
-        val sharedTrioRacesCount = racesWithGeo.count { (race, _) ->
-            val profilesInRace = allSeasonResultsAllRunners
-                .filter { it.raceId == race.raceId }
-                .map { it.profileId }
-                .distinct()
-            profilesInRace.size >= 2
-        }
-
-        val trioQuests = listOf(
-            GaumeTrioQuestProgress(
-                questId = "quest_trio_shared",
-                title = "Escapade du Trio en Gaume",
-                description = "Courir une même manche du Challenge à au moins 2 ou 3 membres du Trio (10 km ou 5 km).",
-                categoryTag = "TRIO",
-                currentProgress = sharedTrioRacesCount.coerceAtMost(3),
-                targetProgress = 3,
-                rewardXp = 250,
-                isCompleted = sharedTrioRacesCount >= 3,
-                accentColorHex = 0xFF006D77
-            ),
-            GaumeTrioQuestProgress(
-                questId = "quest_streak_3",
-                title = "Série Gaumaise (Streak x3)",
-                description = "Enchaîner 3 manches consécutives du calendrier ALG sans interruption.",
-                categoryTag = "RÉGULARITÉ",
-                currentProgress = bestStreak.coerceAtMost(3),
-                targetProgress = 3,
-                rewardXp = 200,
-                isCompleted = bestStreak >= 3,
-                accentColorHex = 0xFFE07A2E
-            ),
-            GaumeTrioQuestProgress(
-                questId = "quest_passport_5",
-                title = "Passeport des 5 Villages",
-                description = "Obtenir 5 tampons de villages différents dans le Passeport Collector.",
-                categoryTag = "PASSEPORT",
-                currentProgress = conqueredVillagesTotal.coerceAtMost(5),
-                targetProgress = 5,
-                rewardXp = 180,
-                isCompleted = conqueredVillagesTotal >= 5,
-                accentColorHex = 0xFF1E7E48
-            ),
-            GaumeTrioQuestProgress(
-                questId = "quest_fiefs_3",
-                title = "Conquérant des Terroirs",
-                description = "Tamponner au moins un village dans 3 Fiefs différents de Gaume.",
-                categoryTag = "TERROIR",
-                currentProgress = conqueredTerritoriesCount.coerceAtMost(3),
-                targetProgress = 3,
-                rewardXp = 220,
-                isCompleted = conqueredTerritoriesCount >= 3,
-                accentColorHex = 0xFFD49B1B
-            ),
-            GaumeTrioQuestProgress(
-                questId = "quest_fiefs_all",
-                title = "Unificateur des $totalTerritoriesCount Fiefs",
-                description = "Courir dans chacun des $totalTerritoriesCount fiefs du jeu (" +
-                    GaumeInitialSeedData.gaumeTerritories.joinToString(", ") { it.title.substringBefore(" &").substringBefore(",") } + ").",
-                categoryTag = "TERROIR",
-                currentProgress = conqueredTerritoriesCount.coerceAtMost(totalTerritoriesCount),
-                targetProgress = totalTerritoriesCount,
-                rewardXp = 400,
-                isCompleted = conqueredTerritoriesCount >= totalTerritoriesCount && totalTerritoriesCount > 0,
-                accentColorHex = 0xFFC85A32
-            ),
-            GaumeTrioQuestProgress(
-                questId = "quest_top15_crown",
-                title = "Couronne Top 15 Validée",
-                description = "Atteindre les 15 courses comptabilisées du Challenge des Allures Libres de Gaume.",
-                categoryTag = "RÉGULARITÉ",
-                currentProgress = countingCount.coerceAtMost(MAX_COUNTING_RACES),
-                targetProgress = MAX_COUNTING_RACES,
-                rewardXp = 500,
-                isCompleted = countingCount >= MAX_COUNTING_RACES,
-                accentColorHex = 0xFF2B59C3
-            )
-        )
-
-        val baseXp = completedTotal * 120 +
-            conqueredTerritoriesCount * 150 +
-            (if (countingCount >= MAX_COUNTING_RACES) 350 else 0) +
-            trioQuests.filter { it.isCompleted }.sumOf { it.rewardXp }
-        val bonusLoyaltyXp = (completedTotal * 40 * (loyaltyMultiplier - 1.0)).roundToInt()
-        val totalXp = baseXp + bonusLoyaltyXp
-
-        val streakSummary = GaumeStreakSummary(
-            currentStreakRaces = currentStreak,
-            bestStreakRaces = bestStreak,
-            loyaltyMultiplier = loyaltyMultiplier,
-            loyaltyTierTitle = loyaltyTitle,
-            bonusLoyaltyXp = bonusLoyaltyXp,
-            nextMilestoneRaces = nextMilestone
-        )
-
-        val runnerLevel = 1 + (totalXp / 300)
-        val runnerRankTitle = when {
-            countingCount >= MAX_COUNTING_RACES && conqueredTerritoriesCount >= 5 -> "Grand Maître du Terroir Gaumais"
-            conqueredTerritoriesCount >= 4 || completedTotal >= 10 -> "Seigneur des Cuestes & Forêts"
-            conqueredTerritoriesCount >= 2 || completedTotal >= 4 -> "Pisteur de la Semois"
-            completedTotal >= 1 -> "Éclaireur des Sentiers de Gaume"
-            else -> "Aspirant du Challenge de Gaume"
-        }
-
-        val territoryBadges = territoriesProgress.map { tp ->
-            GaumeBadgeItem(
-                badgeId = "badge_${tp.territoryId}",
-                title = tp.badgeTitle,
-                description = "Conquérir au moins un village dans le fief « ${tp.title} »",
-                categoryLabel = "Fief de Gaume",
-                isUnlocked = tp.isTerritoryConquered,
-                progressText = "${tp.conqueredRacesCount}/${tp.totalRacesInTerritory} village(s)",
-                accentColorHex = tp.colorHex
-            )
-        }
-
-        val specialBadges = listOf(
-            GaumeBadgeItem(
-                badgeId = "badge_grand_duc_gaume",
-                title = "Unificateur des $totalTerritoriesCount Fiefs",
-                description = "Avoir couru au moins une manche dans chacun des $totalTerritoriesCount fiefs du jeu",
-                categoryLabel = "Légende",
-                isUnlocked = conqueredTerritoriesCount == totalTerritoriesCount && totalTerritoriesCount > 0,
-                progressText = "$conqueredTerritoriesCount/$totalTerritoriesCount fiefs",
-                accentColorHex = 0xFFD49B1B
-            ),
-            GaumeBadgeItem(
-                badgeId = "badge_sanglier_gaumais",
-                title = "Sanglier des Bois Gaumais",
-                description = "Terminer une manche sur terrain Boueux ou Très gras en Gaume",
-                categoryLabel = "Terrain",
-                isUnlocked = muddyRacesCompleted >= 1,
-                progressText = if (muddyRacesCompleted >= 1) "$muddyRacesCompleted course(s) boue" else "0/1 terrain gras",
-                accentColorHex = 0xFF8D5524
-            ),
-            GaumeBadgeItem(
-                badgeId = "badge_top15_complet",
-                title = "Couronne Top 15 ALG",
-                description = "Valider les 15 courses comptabilisées du Challenge des Allures Libres de Gaume",
-                categoryLabel = "Challenge",
-                isUnlocked = countingCount >= MAX_COUNTING_RACES,
-                progressText = "$countingCount/$MAX_COUNTING_RACES courses",
-                accentColorHex = 0xFF1E7E48
-            )
-        )
-
-        return GaumeConquestSummary(
-            conqueredVillagesCount = conqueredVillagesTotal,
-            totalVillagesInSeason = totalVillagesSeason,
-            territoriesConqueredCount = conqueredTerritoriesCount,
-            totalTerritoriesCount = totalTerritoriesCount,
-            xpPoints = totalXp,
-            runnerLevel = runnerLevel,
-            runnerRankTitle = runnerRankTitle,
-            streakSummary = streakSummary,
-            trioQuests = trioQuests,
-            passportStamps = passportStamps,
-            territories = territoriesProgress,
-            badges = territoryBadges + specialBadges
-        )
-    }
-
+    /**
+     * Comparaison d'une saison à l'autre, parcours par parcours : un parcours est identifié par son lieu
+     * et son rang dans la saison (la 1re course de Florenville de 2026 correspond à la 1re de 2025).
+     */
     fun buildSameCourseComparisons(
         profileId: String,
         distanceKm: Int,
@@ -859,46 +521,36 @@ object AlgChallengeCalculator {
         allResults: List<RaceResultEntity>
     ): List<SameCourseYearComparison> {
         val targetDistanceLabel = if (distanceKm == 5) "5 km" else "10 km"
-        val racesA = allRaces.filter { it.seasonYear == seasonA }
-        val racesB = allRaces.filter { it.seasonYear == seasonB }
-        if (racesA.isEmpty() && racesB.isEmpty()) return emptyList()
+        val races = allRaces.filter { it.isChallenge && (it.seasonYear == seasonA || it.seasonYear == seasonB) }
+        if (races.isEmpty()) return emptyList()
+        val keys = CourseDifficultyCalculator.courseKeys(races)
 
-        val resultsA = allResults
-            .filter { it.profileId == profileId && it.seasonYear == seasonA && it.distanceLabel == targetDistanceLabel }
-            .associateBy { it.raceId }
-        val resultsB = allResults
-            .filter { it.profileId == profileId && it.seasonYear == seasonB && it.distanceLabel == targetDistanceLabel }
+        val resultsByRace = allResults
+            .filter { it.profileId == profileId && it.distanceLabel == targetDistanceLabel }
             .associateBy { it.raceId }
 
-        val villages = (racesA.map { it.village } + racesB.map { it.village }).distinct()
+        return races.groupBy { keys[it.raceId] }
+            .mapNotNull { (key, list) ->
+                if (key == null) return@mapNotNull null
+                val raceA = list.firstOrNull { it.seasonYear == seasonA }
+                val raceB = list.firstOrNull { it.seasonYear == seasonB }
+                val resA = raceA?.let { resultsByRace[it.raceId] }
+                val resB = raceB?.let { resultsByRace[it.raceId] }
+                if (resA == null && resB == null) return@mapNotNull null
 
-        return villages.mapNotNull { village ->
-            val raceA = racesA.find { it.village.equals(village, ignoreCase = true) }
-            val raceB = racesB.find { it.village.equals(village, ignoreCase = true) }
-            val resA = raceA?.let { resultsA[it.raceId] }
-            val resB = raceB?.let { resultsB[it.raceId] }
-
-            if (resA == null && resB == null) return@mapNotNull null
-
-            val timeDelta = if (resA != null && resB != null) {
-                resB.officialTimeSeconds - resA.officialTimeSeconds
-            } else null
-
-            val pointsDelta = if (resA != null && resB != null) {
-                resB.challengePoints - resA.challengePoints
-            } else null
-
-            SameCourseYearComparison(
-                courseTitle = raceB?.title ?: raceA?.title ?: village,
-                village = village,
-                distanceLabel = targetDistanceLabel,
-                yearA = seasonA,
-                resultSeasonA = resA,
-                yearB = seasonB,
-                resultSeasonB = resB,
-                timeDeltaSeconds = timeDelta,
-                pointsDelta = pointsDelta
-            )
-        }
+                SameCourseYearComparison(
+                    courseTitle = raceB?.title ?: raceA?.title ?: key,
+                    village = raceB?.village ?: raceA?.village.orEmpty(),
+                    distanceLabel = targetDistanceLabel,
+                    yearA = seasonA,
+                    resultSeasonA = resA,
+                    yearB = seasonB,
+                    resultSeasonB = resB,
+                    timeDeltaSeconds = if (resA != null && resB != null) resB.officialTimeSeconds - resA.officialTimeSeconds else null,
+                    pointsDelta = if (resA != null && resB != null) resB.challengePoints - resA.challengePoints else null,
+                    sortDateIso = (raceB ?: raceA)?.dateIso.orEmpty()
+                )
+            }
+            .sortedBy { it.sortDateIso.substring(minOf(5, it.sortDateIso.length)) }
     }
 }

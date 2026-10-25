@@ -82,7 +82,7 @@ class ChallengeStandingsTest {
     }
 
     @Test
-    fun profileStanding_givesGapAndPointsNeededToPassNext() {
+    fun profileStanding_findsTheProfileByIdOrBib() {
         val damien = GaumeInitialSeedData.buildInitialProfiles().first { it.profileId == "me" }
         val rows = (1..15).associate { n ->
             raceId(n) to listOf(
@@ -94,11 +94,8 @@ class ChallengeStandingsTest {
         val mine = ChallengeStandingsCalculator.standingForProfile(damien, 2026, 10, standings)!!
 
         assertEquals(2, mine.standing.overallRank)
-        assertEquals("DEVANT Coureur", mine.nextAbove?.fullName)
-        val diff = 15 * 2 // 2 points d'écart par course
-        assertEquals(diff + 1, mine.pointsGapToNextAbove)
-        // 15 courses comptées : une nouvelle course remplace la plus faible (1121 pts).
-        assertEquals(1121 + diff + 1, mine.racePointsNeededToPassNext)
+        assertEquals(2, mine.runnersInDistance)
+        assertEquals(15 * 1121, mine.standing.totalPoints)
 
         // Sans dossard 5 km, pas de classement 5 km.
         assertNull(ChallengeStandingsCalculator.standingForProfile(damien, 2026, 5, standings))

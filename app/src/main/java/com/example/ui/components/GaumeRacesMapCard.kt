@@ -769,8 +769,8 @@ fun GaumeRacesMapCard(
             selectedRaceItem?.let { item ->
                 val result = item.resultForDistance(selectedDistanceKm)
                 val tw = item.terrainWeather
-                val currentTerrain = tw?.terrainCondition ?: "Sec"
-                val currentWeather = tw?.weatherCondition ?: "Nuageux"
+                val currentTerrain = tw?.terrainCondition.orEmpty()
+                val currentWeather = tw?.weatherCondition.orEmpty()
                 val isPlanned = tw?.isPlannedForSimulator == true && tw.plannedDistanceKm == selectedDistanceKm
 
                 Surface(
@@ -829,7 +829,8 @@ fun GaumeRacesMapCard(
                                     color = CountingTop15BadgeGreen.copy(alpha = 0.15f)
                                 ) {
                                     Text(
-                                        text = "${result.officialTimeFormatted} • ${result.challengePoints} pts",
+                                        text = "${result.officialTimeFormatted} • ${result.challengePoints} pts" +
+                                            (item.weather?.let { w -> w.temperatureC?.let { " • ${"%.0f".format(it)} °C" } } ?: ""),
                                         style = MaterialTheme.typography.labelMedium,
                                         color = CountingTop15BadgeGreen,
                                         fontWeight = FontWeight.ExtraBold,
@@ -837,7 +838,7 @@ fun GaumeRacesMapCard(
                                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                                     )
                                 }
-                            } else if (tw != null) {
+                            } else if (tw != null && currentTerrain.isNotBlank()) {
                                 TerrainAndWeatherMiniBadge(
                                     terrainCondition = currentTerrain,
                                     weatherCondition = currentWeather,

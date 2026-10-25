@@ -3,27 +3,52 @@ package com.example.data.repository
 import android.content.Context
 import android.net.Uri
 import com.example.data.local.ActivityMetricsEntity
-import com.example.data.local.ChallengeStandingEntity
 import com.example.data.local.AlgDao
+import com.example.data.local.ChallengeStandingEntity
+import com.example.data.local.CourseFactorEntity
 import com.example.data.local.GaumeInitialSeedData
 import com.example.data.local.MyChronoDirectoryEntry
+import com.example.data.local.MyChronoRowEntity
 import com.example.data.local.RaceBibOverrideEntity
 import com.example.data.local.RaceEntity
+import com.example.data.local.RaceFetchStateEntity
 import com.example.data.local.RaceResultEntity
 import com.example.data.local.RaceTerrainWeatherEntity
+import com.example.data.local.RaceWeatherEntity
 import com.example.data.local.RunnerProfileEntity
+import com.example.data.local.SeasonBibEntity
 import com.example.data.remote.MyChronoApiClient
+import com.example.data.remote.MyChronoRawResultRow
+import com.example.data.remote.OpenMeteoClient
 import com.example.domain.ChallengeStandingsCalculator
+import com.example.domain.CourseDifficultyCalculator
 import com.example.domain.GpxAndTrackUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.time.LocalDate
 
 class AlgRepository(
     private val algDao: AlgDao,
-    private val myChronoApiClient: MyChronoApiClient = MyChronoApiClient()
+    private val myChronoApiClient: MyChronoApiClient = MyChronoApiClient(),
+    private val openMeteoClient: OpenMeteoClient = OpenMeteoClient(),
+    private val today: () -> LocalDate = { LocalDate.now() }
 ) {
+    companion object {
+        /** Première saison publiée par MyChrono pour le Challenge des Allures Libres de Gaume. */
+        const val FIRST_SEASON = 2025
+
+        /** Une manche close est retéléchargée pendant ces jours-là (corrections de classement). */
+        private const val REFRESH_WINDOW_DAYS = 21L
+
+        /** Nombre maximal de courses dont la météo est cherchée à chaque synchro. */
+        private const val MAX_WEATHER_PER_SYNC = 40
+    }
+
+    private val recomputeMutex = Mutex()
+
     val runnerProfilesFlow: Flow<List<RunnerProfileEntity>> = algDao.observeRunnerProfiles()
     val allRacesFlow: Flow<List<RaceEntity>> = algDao.observeAllRaces()
     val allResultsFlow: Flow<List<RaceResultEntity>> = algDao.observeAllResults()
@@ -32,136 +57,274 @@ class AlgRepository(
     val allTerrainWeatherFlow: Flow<List<RaceTerrainWeatherEntity>> = algDao.observeAllTerrainWeather()
     val directoryFlow: Flow<List<MyChronoDirectoryEntry>> = algDao.observeDirectory()
     val standingsFlow: Flow<List<ChallengeStandingEntity>> = algDao.observeAllStandings()
+    val seasonBibsFlow: Flow<List<SeasonBibEntity>> = algDao.observeSeasonBibs()
+    val courseFactorsFlow: Flow<List<CourseFactorEntity>> = algDao.observeCourseFactors()
+    val raceWeatherFlow: Flow<List<RaceWeatherEntity>> = algDao.observeRaceWeather()
+
+    /** Saisons proposées : de 2025 (saison de référence) à l'année en cours. */
+    fun getAvailableSeasons(): List<Int> = (FIRST_SEASON..maxOf(FIRST_SEASON, today().year)).toList()
 
     /**
-     * Saisons disponibles à partir de 2026 (2026, 2027, et toute année >= 2027). Jamais 2025.
-     */
-    fun getAvailableSeasonsFrom2026(): List<Int> {
-        val currentYear = LocalDate.now().year
-        val maxYear = maxOf(2027, currentYear)
-        return (2026..maxYear).toList()
-    }
-
-    /**
-     * Crée les 3 profils du Trio au premier lancement et purge tout résultat sur une distance sans dossard.
-     * Aucun calendrier n'est inventé : les manches viennent uniquement de MyChrono.
+     * Crée les 3 profils du Trio au premier lancement (avec leurs dossards 2026).
+     * Aucun calendrier n'est inventé : les courses viennent uniquement de MyChrono.
      */
     suspend fun ensureSeeded() = withContext(Dispatchers.IO) {
-        algDao.deletePre2026Races()
-        algDao.deletePre2026Results()
+        algDao.deletePre2025Races()
+        algDao.deletePre2025Results()
 
         if (algDao.getRunnerProfilesSnapshot().isEmpty()) {
-            algDao.upsertRunnerProfiles(GaumeInitialSeedData.buildInitialProfiles())
-        }
-
-        purgeResultsWithoutAssignedBib()
-    }
-
-    /**
-     * Supprime immédiatement tout résultat (10 km ou 5 km) si le profil n'a pas de numéro de dossard
-     * attribué pour ce challenge (ni sur le profil, ni sur la manche).
-     */
-    suspend fun purgeResultsWithoutAssignedBib() = withContext(Dispatchers.IO) {
-        val profiles = algDao.getRunnerProfilesSnapshot()
-        for (profile in profiles) {
-            val overrides = algDao.getBibOverridesForProfile(profile.profileId)
-            val has10kOverride = overrides.any { it.distanceKm == 10 && it.bibNumber.isNotBlank() }
-            val has5kOverride = overrides.any { it.distanceKm == 5 && it.bibNumber.isNotBlank() }
-
-            if (profile.defaultBib10km.isBlank() && !has10kOverride) {
-                algDao.deleteResultsForProfileAndDistance(profile.profileId, "10 km")
-            }
-            if (profile.defaultBib5km.isBlank() && !has5kOverride) {
-                algDao.deleteResultsForProfileAndDistance(profile.profileId, "5 km")
+            val profiles = GaumeInitialSeedData.buildInitialProfiles()
+            algDao.upsertRunnerProfiles(profiles)
+            if (algDao.getSeasonBibsSnapshot().isEmpty()) {
+                profiles.forEach { p ->
+                    algDao.upsertSeasonBib(SeasonBibEntity(p.profileId, 2026, p.defaultBib10km, p.defaultBib5km))
+                }
             }
         }
     }
 
-    /**
-     * Purge intégralement les résultats et relance une synchronisation propre basée uniquement sur les dossards attribués.
-     */
-    suspend fun resetAndResyncCleanResults(seasonYear: Int): Result<String> = withContext(Dispatchers.IO) {
-        algDao.deleteAllRaceResults()
-        syncSeasonFromMyChrono(maxOf(2026, seasonYear))
+    private fun MyChronoRowEntity.toRaw() = MyChronoRawResultRow(
+        runnerId = runnerId,
+        bibNumber = bibNumber,
+        fullName = fullName,
+        club = club,
+        category = category,
+        sex = sex,
+        distanceLabel = distanceLabel,
+        distanceKm = distanceKm,
+        timeSeconds = timeSeconds,
+        timeFormatted = formatTime(timeSeconds),
+        overallRank = overallRank,
+        totalFinishers = totalFinishers,
+        categoryRank = categoryRank,
+        categoryTotal = categoryTotal,
+        points = points,
+        distanceName = distanceName
+    )
+
+    private fun formatTime(totalSeconds: Int): String {
+        val h = totalSeconds / 3600
+        val m = (totalSeconds % 3600) / 60
+        val sec = totalSeconds % 60
+        return if (h > 0) "%d:%02d:%02d".format(h, m, sec) else "%02d:%02d".format(m, sec)
+    }
+
+    private fun hasPublishedResults(race: RaceEntity, now: LocalDate): Boolean {
+        if (race.dateIso > now.toString()) return false
+        return race.statusLabel != "planned" || (race.finishersCount ?: 0) > 0
+    }
+
+    private fun needsFetch(race: RaceEntity, state: RaceFetchStateEntity?, now: LocalDate, force: Boolean): Boolean {
+        if (!hasPublishedResults(race, now)) return false
+        if (force || state == null || state.rowCount == 0 || state.raceDateIso != race.dateIso) return true
+        return race.dateIso >= now.minusDays(REFRESH_WINDOW_DAYS).toString()
+    }
+
+    private suspend fun storeRows(race: RaceEntity, rows: List<MyChronoRawResultRow>) {
+        algDao.deleteRowsForRace(race.raceId)
+        algDao.insertRows(rows.mapIndexed { idx, r ->
+            MyChronoRowEntity(
+                raceId = race.raceId,
+                distanceLabel = r.distanceLabel,
+                rowIndex = idx,
+                seasonYear = race.seasonYear,
+                isChallenge = race.isChallenge,
+                distanceName = r.distanceName.ifBlank { r.distanceLabel },
+                distanceKm = r.distanceKm,
+                runnerId = r.runnerId,
+                bibNumber = r.bibNumber,
+                fullName = r.fullName,
+                club = r.club,
+                category = r.category,
+                sex = r.sex,
+                timeSeconds = r.timeSeconds,
+                overallRank = r.overallRank,
+                totalFinishers = r.totalFinishers,
+                categoryRank = r.categoryRank,
+                categoryTotal = r.categoryTotal,
+                points = r.points
+            )
+        })
+        algDao.upsertFetchState(
+            RaceFetchStateEntity(
+                raceId = race.raceId,
+                seasonYear = race.seasonYear,
+                raceDateIso = race.dateIso,
+                fetchedAtEpochMillis = System.currentTimeMillis(),
+                rowCount = rows.size
+            )
+        )
     }
 
     /**
-     * Synchronise une saison depuis l'API publique MyChrono : calendrier, résultats du Trio
-     * (10 km et 5 km strictement séparés) et classement provisoire de tous les coureurs.
-     * Si MyChrono ne publie rien, les données locales sont laissées telles quelles.
+     * Synchronise toutes les saisons depuis l'API publique MyChrono :
+     * calendriers (1 appel par saison), puis résultats des seules courses nouvelles ou récentes
+     * (une course close depuis plus de 3 semaines est gardée sur le téléphone), puis recalcul local
+     * des résultats du Trio, du classement provisoire et des indices de parcours, et enfin la météo.
      */
-    suspend fun syncSeasonFromMyChrono(seasonYear: Int): Result<String> = withContext(Dispatchers.IO) {
-        val targetYear = maxOf(2026, seasonYear)
-        val profiles = algDao.getRunnerProfilesSnapshot()
+    suspend fun syncAll(force: Boolean = false): Result<String> = withContext(Dispatchers.IO) {
+        val now = today()
+        val seasons = (FIRST_SEASON..now.year + 1).toList()
 
-        purgeResultsWithoutAssignedBib()
-
-        myChronoApiClient.fetchSeasonFromMyChrono(targetYear).map { payload ->
-            if (payload.updatedRaces.isNotEmpty()) {
-                algDao.deleteRacesBySeason(targetYear)
-                algDao.upsertRaces(payload.updatedRaces)
+        val calendars = seasons.associateWith { myChronoApiClient.fetchSeasonCalendar(it) }
+        if (calendars.values.all { it.isFailure }) {
+            return@withContext Result.failure(
+                calendars.values.first().exceptionOrNull() ?: IllegalStateException("MyChrono injoignable")
+            )
+        }
+        calendars.forEach { (year, res) ->
+            val races = res.getOrNull().orEmpty()
+            if (races.isNotEmpty()) {
+                algDao.deleteRacesBySeason(year)
+                algDao.upsertRaces(races)
             }
-            if (payload.discoveredDirectoryEntries.isNotEmpty()) {
-                algDao.upsertDirectoryEntries(payload.discoveredDirectoryEntries)
-            }
+        }
 
-            val allMatchedResults = mutableListOf<RaceResultEntity>()
-            for (profile in profiles) {
-                val overrides = algDao.getBibOverridesForProfile(profile.profileId)
-                    .associateBy { it.raceId }
+        val allRaces = algDao.getAllRacesSnapshot()
+        val states = algDao.getFetchStates().associateBy { it.raceId }
+        val toFetch = allRaces.filter { needsFetch(it, states[it.raceId], now, force) }
+        val fetched = myChronoApiClient.fetchManyRaceResults(toFetch)
+        val raceById = allRaces.associateBy { it.raceId }
+        fetched.forEach { (raceId, rows) -> raceById[raceId]?.let { storeRows(it, rows) } }
 
-                for (race in payload.updatedRaces) {
-                    allMatchedResults.addAll(
-                        myChronoApiClient.findMatchingResultsForProfile(
-                            raceId = race.raceId,
-                            seasonYear = targetYear,
-                            profile = profile,
-                            raceOverride = overrides[race.raceId],
-                            rawRows = payload.rawRowsByRaceId[race.raceId].orEmpty()
-                        )
-                    )
-                }
-            }
+        recomputeAllSeasons()
+        val weatherCount = runCatching { fetchMissingWeather(now) }.getOrDefault(0)
 
-            if (payload.rawRowsByRaceId.isNotEmpty()) {
-                algDao.deleteResultsBySeason(targetYear)
-                if (allMatchedResults.isNotEmpty()) {
-                    algDao.upsertRaceResults(allMatchedResults)
-                }
-                val now = System.currentTimeMillis()
-                algDao.deleteStandingsBySeason(targetYear)
-                algDao.upsertStandings(
-                    ChallengeStandingsCalculator.computeSeasonStandings(
-                        seasonYear = targetYear,
-                        rawRowsByRaceId = payload.rawRowsByRaceId,
-                        computedAtEpochMillis = now
-                    )
+        val stamp = System.currentTimeMillis()
+        algDao.getRunnerProfilesSnapshot().forEach { algDao.upsertRunnerProfile(it.copy(lastSyncedEpochMillis = stamp)) }
+
+        val current = allRaces.filter { it.seasonYear == now.year }
+        val newResults = fetched.count { (raceId, rows) -> rows.isNotEmpty() && states[raceId]?.rowCount != rows.size }
+        Result.success(
+            buildString {
+                append("MyChrono ${now.year} : ${current.count { it.isChallenge }} manches")
+                val hc = current.count { !it.isChallenge }
+                if (hc > 0) append(" + $hc hors challenge")
+                append(" • ")
+                append(
+                    when (newResults) {
+                        0 -> "aucun nouveau classement"
+                        1 -> "1 classement mis à jour"
+                        else -> "$newResults classements mis à jour"
+                    }
                 )
+                if (weatherCount > 0) append(" • météo de $weatherCount course(s)")
+                val failed = toFetch.size - fetched.size
+                if (failed > 0) append(" • $failed course(s) injoignable(s)")
             }
+        )
+    }
 
-            purgeResultsWithoutAssignedBib()
+    /** Ancien point d'entrée : synchronise tout. */
+    suspend fun syncSeasonFromMyChrono(@Suppress("UNUSED_PARAMETER") seasonYear: Int): Result<String> = syncAll()
 
-            val now = System.currentTimeMillis()
-            profiles.forEach { profile ->
-                algDao.upsertRunnerProfile(profile.copy(lastSyncedEpochMillis = now))
-            }
+    /** Retélécharge tous les classements publiés puis recalcule tout. */
+    suspend fun resetAndResyncCleanResults(): Result<String> = syncAll(force = true)
 
-            val count10k = allMatchedResults.count { it.distanceLabel == "10 km" }
-            val count5k = allMatchedResults.count { it.distanceLabel == "5 km" }
-            if (payload.updatedRaces.isEmpty()) {
-                payload.message
-            } else {
-                "${payload.message} ($count10k rés. 10 km • $count5k rés. 5 km)"
-            }
-        }
+    private suspend fun recomputeAllSeasons() {
+        algDao.getSeasonsWithRows().sorted().forEach { recomputeSeason(it) }
     }
 
     /**
-     * Met à jour les dossards 10 km et 5 km et la distance par défaut d'un profil,
-     * purge immédiatement toute distance sans dossard, puis synchronise MyChrono.
+     * Recalcule une saison à partir des résultats bruts gardés sur le téléphone (aucun appel réseau) :
+     * résultats du Trio, classement provisoire (manches seulement), indices de parcours et annuaire.
+     */
+    suspend fun recomputeSeason(seasonYear: Int) = withContext(Dispatchers.IO) {
+        recomputeMutex.withLock {
+            val races = algDao.getRacesBySeasonSnapshot(seasonYear)
+            val rowsByRace = algDao.getRowsForSeason(seasonYear)
+                .groupBy { it.raceId }
+                .mapValues { (_, rows) -> rows.sortedBy { it.rowIndex }.map { it.toRaw() } }
+                .filterKeys { id -> races.any { it.raceId == id } }
+            if (rowsByRace.isEmpty()) return@withLock
+
+            val challengeIds = races.filter { it.isChallenge }.map { it.raceId }.toSet()
+            val profiles = algDao.getRunnerProfilesSnapshot()
+            val seasonBibs = algDao.getSeasonBibsSnapshot().filter { it.seasonYear == seasonYear }
+                .associateBy { it.profileId }
+            val overrides = algDao.getAllBibOverridesSnapshot().groupBy { it.profileId }
+                .mapValues { (_, list) -> list.associateBy { it.raceId } }
+
+            val results = mutableListOf<RaceResultEntity>()
+            for (profile in profiles) {
+                val sb = seasonBibs[profile.profileId]
+                val declared = sb != null && (sb.bib10km.isNotBlank() || sb.bib5km.isNotBlank())
+                val seasonProfile = profile.copy(
+                    defaultBib10km = sb?.bib10km.orEmpty(),
+                    defaultBib5km = sb?.bib5km.orEmpty()
+                )
+                for (race in races) {
+                    val rows = rowsByRace[race.raceId] ?: continue
+                    results += myChronoApiClient.findMatchingResultsForProfile(
+                        raceId = race.raceId,
+                        seasonYear = seasonYear,
+                        profile = seasonProfile,
+                        raceOverride = overrides[profile.profileId]?.get(race.raceId),
+                        rawRows = rows,
+                        isChallenge = race.isChallenge,
+                        seasonBibsDeclared = declared
+                    )
+                }
+            }
+            algDao.deleteResultsBySeason(seasonYear)
+            if (results.isNotEmpty()) algDao.upsertRaceResults(results.distinctBy { Triple(it.raceId, it.profileId, it.distanceLabel) })
+
+            val stamp = System.currentTimeMillis()
+            algDao.deleteStandingsBySeason(seasonYear)
+            algDao.upsertStandings(
+                ChallengeStandingsCalculator.computeSeasonStandings(
+                    seasonYear = seasonYear,
+                    rawRowsByRaceId = rowsByRace.filterKeys { it in challengeIds },
+                    computedAtEpochMillis = stamp
+                )
+            )
+
+            algDao.deleteCourseFactorsBySeason(seasonYear)
+            algDao.upsertCourseFactors(
+                CourseDifficultyCalculator.computeSeasonFactors(rowsByRace, challengeIds).map {
+                    CourseFactorEntity(it.raceId, it.distanceLabel, seasonYear, it.factor, it.regularsCount)
+                }
+            )
+
+            algDao.upsertDirectoryEntries(myChronoApiClient.buildDirectoryFromRows(rowsByRace.values.flatten()))
+        }
+    }
+
+    /** Météo réelle des courses courues par le Trio (une seule fois par course). */
+    private suspend fun fetchMissingWeather(now: LocalDate): Int {
+        val known = algDao.getRaceWeatherSnapshot().map { it.raceId }.toSet()
+        val racedIds = algDao.getAllResultsSnapshot().map { it.raceId }.toSet()
+        val candidates = algDao.getAllRacesSnapshot()
+            .filter { it.raceId in racedIds && it.raceId !in known }
+            .filter { it.dateIso < now.toString() }
+            .filter { it.startLatitude != null && it.startLongitude != null }
+            .sortedByDescending { it.dateIso }
+            .take(MAX_WEATHER_PER_SYNC)
+        var count = 0
+        for (race in candidates) {
+            val w = openMeteoClient.fetchRaceWeather(
+                raceId = race.raceId,
+                latitude = race.startLatitude!!,
+                longitude = race.startLongitude!!,
+                raceDateIso = race.dateIso,
+                startHour = OpenMeteoClient.parseStartHour(race.schedule),
+                today = now
+            ).getOrNull()
+            if (w != null) {
+                algDao.upsertRaceWeather(w)
+                count++
+            }
+        }
+        return count
+    }
+
+    /**
+     * Met à jour le profil et ses dossards pour une saison, puis recalcule cette saison
+     * à partir des résultats déjà sur le téléphone (synchro complète si la saison n'en a pas encore).
      */
     suspend fun updateProfileBibAndDistance(
         profileId: String,
+        seasonYear: Int,
         newDisplayName: String,
         newMyChronoId: String,
         defaultBib10km: String,
@@ -183,24 +346,30 @@ class AlgRepository(
             else -> 10
         }
 
-        val updated = existing.copy(
-            displayName = newDisplayName.trim().ifBlank { existing.displayName },
-            myChronoRunnerId = newMyChronoId.trim(),
-            defaultBib10km = cleanBib10,
-            defaultBib5km = cleanBib5,
-            preferredDistanceKm = resolvedPreferredDist,
-            clubName = clubName.trim().ifBlank { existing.clubName },
-            categoryLabel = categoryLabel.trim().ifBlank { existing.categoryLabel },
-            lastSyncedEpochMillis = System.currentTimeMillis()
+        algDao.upsertRunnerProfile(
+            existing.copy(
+                displayName = newDisplayName.trim().ifBlank { existing.displayName },
+                myChronoRunnerId = newMyChronoId.trim(),
+                defaultBib10km = cleanBib10,
+                defaultBib5km = cleanBib5,
+                preferredDistanceKm = resolvedPreferredDist,
+                clubName = clubName.trim().ifBlank { existing.clubName },
+                categoryLabel = categoryLabel.trim().ifBlank { existing.categoryLabel }
+            )
         )
-        algDao.upsertRunnerProfile(updated)
-        algDao.deleteResultsForProfile(profileId)
-        syncSeasonFromMyChrono(2026)
+        algDao.upsertSeasonBib(SeasonBibEntity(profileId, seasonYear, cleanBib10, cleanBib5))
+
+        if (algDao.getRowsForSeason(seasonYear).isEmpty()) {
+            syncAll()
+        } else {
+            recomputeSeason(seasonYear)
+            Result.success("Saison $seasonYear recalculée")
+        }
     }
 
     /**
-     * Enregistre le numéro de dossard et la distance (5 km ou 10 km) pour une course précise
-     * et interroge immédiatement l'API MyChrono pour cette course.
+     * Enregistre le dossard et la distance (5 ou 10 km) d'un profil pour une course précise,
+     * récupère les résultats de cette course si besoin, puis recalcule la saison.
      */
     suspend fun setRaceBibAndDistanceAndSync(
         raceId: String,
@@ -208,119 +377,89 @@ class AlgRepository(
         bibNumber: String,
         distanceKm: Int
     ): Result<String> = withContext(Dispatchers.IO) {
-        val cleanBib = bibNumber.trim().removePrefix("#")
-        val cleanDist = if (distanceKm == 5) 5 else 10
-        if (cleanBib.isBlank()) {
-            algDao.deleteBibOverride(raceId, profileId)
-            algDao.deleteResultForRaceProfileAndDistance(
-                raceId = raceId,
-                profileId = profileId,
-                distanceLabel = if (cleanDist == 5) "5 km" else "10 km"
-            )
-            return@withContext Result.success("Dossard retiré sur cette manche (0 course comptabilisée).")
-        }
-
-        val overrideEntity = RaceBibOverrideEntity(
-            raceId = raceId,
-            profileId = profileId,
-            bibNumber = cleanBib,
-            distanceKm = cleanDist
-        )
-        algDao.upsertBibOverride(overrideEntity)
-
         val race = algDao.getRaceById(raceId)
             ?: return@withContext Result.failure(IllegalStateException("Course introuvable"))
-        val profile = algDao.getRunnerProfile(profileId)
-            ?: return@withContext Result.failure(IllegalStateException("Profil introuvable"))
+        val cleanBib = bibNumber.trim().removePrefix("#")
+        val cleanDist = if (distanceKm == 5) 5 else 10
 
-        myChronoApiClient.fetchRaceRawResults(race.myChronoEventId).fold(
-            onSuccess = { rows ->
-                val matchedList = myChronoApiClient.findMatchingResultsForProfile(
-                    raceId = race.raceId,
-                    seasonYear = race.seasonYear,
-                    profile = profile,
-                    raceOverride = overrideEntity,
-                    rawRows = rows
-                )
-                if (matchedList.isNotEmpty()) {
-                    algDao.deleteResultForRaceAndProfile(race.raceId, profile.profileId)
-                    algDao.upsertRaceResults(matchedList)
-                    val first = matchedList.first()
-                    Result.success(
-                        "Résultat MyChrono (${first.distanceLabel}) trouvé pour le dossard #${first.bibNumber} : ${first.officialTimeFormatted} (${first.challengePoints} pts)"
-                    )
-                } else {
-                    Result.failure(
-                        IllegalStateException(
-                            "Aucun résultat trouvé dans MyChrono (${race.title}) pour le dossard #$cleanBib sur $cleanDist km."
-                        )
-                    )
-                }
-            },
-            onFailure = { err ->
-                Result.failure(err)
-            }
-        )
+        if (cleanBib.isBlank()) {
+            algDao.deleteBibOverride(raceId, profileId)
+            recomputeSeason(race.seasonYear)
+            return@withContext Result.success("Dossard retiré sur cette course.")
+        }
+        algDao.upsertBibOverride(RaceBibOverrideEntity(raceId, profileId, cleanBib, cleanDist))
+
+        if (algDao.getRowsForRace(raceId).isEmpty()) {
+            myChronoApiClient.fetchRaceRawResults(race.myChronoEventId, race.isChallenge)
+                .onFailure { return@withContext Result.failure(it) }
+                .onSuccess { storeRows(race, it) }
+        }
+        recomputeSeason(race.seasonYear)
+
+        val found = algDao.getAllResultsSnapshot().firstOrNull {
+            it.raceId == raceId && it.profileId == profileId && it.distanceLabel == (if (cleanDist == 5) "5 km" else "10 km")
+        }
+        if (found != null) {
+            val pts = if (race.isChallenge) " (${found.challengePoints} pts)" else " (hors challenge)"
+            Result.success("Résultat trouvé pour le dossard #${found.bibNumber} : ${found.officialTimeFormatted}$pts")
+        } else {
+            Result.failure(
+                IllegalStateException("Aucun résultat MyChrono (${race.title}) pour le dossard #$cleanBib sur ${race.distanceNameFor(cleanDist)}.")
+            )
+        }
     }
 
-    /**
-     * Sauvegarde la météo, l'état du terrain (Sec, Souple, Boueux, Très gras) et/ou la sélection Simulateur Top 15.
-     */
+    /** Terrain noté par le coureur, notes et sélection Simulateur Top 15 ("" = non renseigné). */
     suspend fun saveRaceTerrainWeather(
         raceId: String,
         profileId: String,
-        seasonYear: Int,
-        weatherCondition: String,
-        temperatureC: Int?,
         terrainCondition: String,
         isPlannedForSimulator: Boolean,
         plannedDistanceKm: Int,
         simulatedTargetPoints: Int?,
         runnerNotes: String
     ) = withContext(Dispatchers.IO) {
-        val entity = RaceTerrainWeatherEntity(
-            raceId = raceId,
-            profileId = profileId,
-            weatherCondition = weatherCondition.ifBlank { "Nuageux" },
-            temperatureC = temperatureC,
-            terrainCondition = terrainCondition.ifBlank { "Sec" },
-            isPlannedForSimulator = isPlannedForSimulator,
-            plannedDistanceKm = if (plannedDistanceKm == 5) 5 else 10,
-            simulatedTargetPoints = simulatedTargetPoints?.coerceIn(0, 1200),
-            terrainNotes = runnerNotes.trim()
+        val existing = algDao.getTerrainWeather(raceId, profileId)
+        algDao.upsertTerrainWeather(
+            RaceTerrainWeatherEntity(
+                raceId = raceId,
+                profileId = profileId,
+                terrainCondition = terrainCondition.trim(),
+                weatherCondition = existing?.weatherCondition.orEmpty(),
+                temperatureC = existing?.temperatureC,
+                isPlannedForSimulator = isPlannedForSimulator,
+                plannedDistanceKm = if (plannedDistanceKm == 5) 5 else 10,
+                simulatedTargetPoints = simulatedTargetPoints?.coerceIn(0, 1200),
+                terrainNotes = runnerNotes.trim()
+            )
         )
-        algDao.upsertTerrainWeather(entity)
     }
 
-    /**
-     * Bascule rapide d'une course à venir dans le Simulateur Top 15.
-     */
+    /** Bascule rapide d'une course à venir dans le Simulateur Top 15. */
     suspend fun togglePlannedRaceForSimulator(
         raceId: String,
         profileId: String,
-        seasonYear: Int,
         distanceKm: Int,
         isPlanned: Boolean,
         defaultTargetPoints: Int
     ) = withContext(Dispatchers.IO) {
         val existing = algDao.getTerrainWeather(raceId, profileId)
-        val updated = RaceTerrainWeatherEntity(
-            raceId = raceId,
-            profileId = profileId,
-            weatherCondition = existing?.weatherCondition ?: "Nuageux",
-            temperatureC = existing?.temperatureC,
-            terrainCondition = existing?.terrainCondition ?: "Sec",
-            isPlannedForSimulator = isPlanned,
-            plannedDistanceKm = if (distanceKm == 5) 5 else 10,
-            simulatedTargetPoints = existing?.simulatedTargetPoints ?: defaultTargetPoints.coerceIn(0, 1200),
-            terrainNotes = existing?.terrainNotes ?: ""
+        algDao.upsertTerrainWeather(
+            RaceTerrainWeatherEntity(
+                raceId = raceId,
+                profileId = profileId,
+                weatherCondition = existing?.weatherCondition.orEmpty(),
+                temperatureC = existing?.temperatureC,
+                terrainCondition = existing?.terrainCondition.orEmpty(),
+                isPlannedForSimulator = isPlanned,
+                plannedDistanceKm = if (distanceKm == 5) 5 else 10,
+                simulatedTargetPoints = existing?.simulatedTargetPoints ?: defaultTargetPoints.coerceIn(0, 1200),
+                terrainNotes = existing?.terrainNotes.orEmpty()
+            )
         )
-        algDao.upsertTerrainWeather(updated)
     }
 
-    /**
-     * Importe une trace GPX locale choisie par le coureur et l'associe à une course (>= 2026).
-     */
+    /** Importe une trace GPX locale choisie par le coureur et l'associe à une course. */
     suspend fun importGpxTrackForRace(
         context: Context,
         raceId: String,

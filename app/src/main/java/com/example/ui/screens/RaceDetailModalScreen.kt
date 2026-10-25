@@ -76,6 +76,7 @@ import com.example.domain.RunnerChallengeSummary
 import com.example.ui.components.GaumeGpsAndElevationCanvas
 import com.example.ui.components.GaumePerfsCalculator
 import com.example.ui.components.GaumeRacePronosticEntry
+import com.example.ui.components.RaceConditionsCard
 import com.example.ui.components.RacePracticalInfoCard
 import com.example.ui.components.RacePronosticVsActualMiniBanner
 import com.example.ui.components.openDirectionsTo
@@ -101,8 +102,6 @@ fun RaceDetailModalScreen(
     onSaveRaceTerrainAndWeather: (
         profileId: String,
         terrainCondition: String,
-        weatherCondition: String,
-        temperatureC: Int?,
         terrainNotes: String,
         isPlannedForSimulator: Boolean,
         plannedDistanceKm: Int,
@@ -146,14 +145,10 @@ fun RaceDetailModalScreen(
 
     val tw = raceItem.terrainWeather
     var terrainCondition by remember(activeProfileId, tw) {
-        mutableStateOf(tw?.terrainCondition ?: "Sec")
+        mutableStateOf(tw?.terrainCondition.orEmpty())
     }
-    var weatherCondition by remember(activeProfileId, tw) {
-        mutableStateOf(tw?.weatherCondition ?: "Nuageux")
-    }
-    var temperatureInput by remember(activeProfileId, tw) {
-        mutableStateOf(tw?.temperatureC?.toString().orEmpty())
-    }
+    val isChallenge = race.isChallenge
+    val canPlanInSimulator = isChallenge && !race.isCompleted
     var terrainNotes by remember(activeProfileId, tw) {
         mutableStateOf(tw?.terrainNotes.orEmpty())
     }
@@ -189,7 +184,7 @@ fun RaceDetailModalScreen(
                 title = {
                     Column {
                         Text(
-                            text = "Manche #${race.roundNumber} • ${race.title}",
+                            text = (if (isChallenge) "Manche #${race.roundNumber}" else "Hors challenge") + " • ${race.title}",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             maxLines = 1,
@@ -306,7 +301,7 @@ fun RaceDetailModalScreen(
                             modifier = Modifier.padding(horizontal = 10.dp)
                         ) {
                             Text(
-                                text = "$dist km",
+                                text = race.distanceNameFor(dist),
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.ExtraBold,
                                 color = if (isSel) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
@@ -328,6 +323,8 @@ fun RaceDetailModalScreen(
             OfficialMyChronoResultCard(
                 runnerName = activeProfile?.displayName ?: "Moi",
                 distanceKm = distanceKm,
+                distanceName = race.distanceNameFor(distanceKm),
+                isChallenge = isChallenge,
                 result = currentResult,
                 pronosticEntry = pronosticEntry,
                 isCountingInTop15 = isCountingInTop15,
@@ -342,66 +339,12 @@ fun RaceDetailModalScreen(
                 geo = raceItem.gaumeGeo
             )
 
-            // 3. BANDEAU FIEF DE GAUME & MÉTÉO RÉSUMÉE
-            Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = if (currentResult != null) {
-                    CountingTop15BadgeGreen.copy(alpha = 0.12f)
-                } else {
-                    GoldPodium.copy(alpha = 0.12f)
-                },
-                border = BorderStroke(
-                    1.dp,
-                    if (currentResult != null) CountingTop15BadgeGreen.copy(alpha = 0.45f)
-                    else GoldPodium.copy(alpha = 0.45f)
-                ),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Shield,
-                            contentDescription = null,
-                            tint = if (currentResult != null) CountingTop15BadgeGreen else GoldPodium,
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Column {
-                            Text(
-                                text = if (currentResult != null) {
-                                    "Village Conquis : ${raceItem.gaumeGeo.canonicalVillage} (+150 XP)"
-                                } else {
-                                    "Village à Conquérir : ${raceItem.gaumeGeo.canonicalVillage}"
-                                },
-                                style = MaterialTheme.typography.labelLarge,
-                                fontWeight = FontWeight.ExtraBold,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Text(
-                                text = "Fief : ${raceItem.gaumeGeo.territoryName} • " + if (tw != null) {
-                                    "Terrain : $terrainCondition • $weatherCondition" + (tw.temperatureC?.let { " ($it°C)" } ?: "")
-                                } else {
-                                    "Terrain et météo non renseignés"
-                                },
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    }
-                }
-            }
+            // 3. CONDITIONS : MÉTÉO RÉELLE, INDICE DU PARCOURS, TERRAIN NOTÉ
+            RaceConditionsCard(
+                raceItem = raceItem,
+                distanceKm = distanceKm,
+                terrainCondition = terrainCondition
+            )
 
             // 4. COMPARAISON DU TRIO SUR CETTE MANCHE
             TrioRaceComparisonSection(
@@ -564,15 +507,16 @@ fun RaceDetailModalScreen(
                             Spacer(modifier = Modifier.width(8.dp))
                             Column {
                                 Text(
-                                    text = "Météo, Terrain & Simulateur Top 15",
+                                    text = if (canPlanInSimulator) "Terrain, notes & Simulateur Top 15" else "Terrain & notes",
                                     style = MaterialTheme.typography.titleSmall,
                                     fontWeight = FontWeight.ExtraBold,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
-                                    text = "$terrainCondition • $weatherCondition (${temperatureInput}°C)" +
-                                        if (isPlannedSimulator) " • Prévue Top 15" else "",
+                                    text = terrainCondition.ifBlank { "Terrain non noté" } +
+                                        (if (terrainNotes.isNotBlank()) " • $terrainNotes" else "") +
+                                        if (isPlannedSimulator && canPlanInSimulator) " • Prévue Top 15" else "",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     maxLines = 1,
@@ -606,7 +550,7 @@ fun RaceDetailModalScreen(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
-                                listOf("Sec", "Souple", "Boueux", "Très gras").forEach { cond ->
+                                listOf("", "Sec", "Souple", "Boueux", "Très gras").forEach { cond ->
                                     val isSelected = terrainCondition == cond
                                     Surface(
                                         modifier = Modifier
@@ -624,7 +568,7 @@ fun RaceDetailModalScreen(
                                     ) {
                                         Box(contentAlignment = Alignment.Center) {
                                             Text(
-                                                text = cond,
+                                                text = cond.ifBlank { "Non noté" },
                                                 style = MaterialTheme.typography.labelSmall,
                                                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
                                                 color = if (isSelected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
@@ -636,67 +580,16 @@ fun RaceDetailModalScreen(
                                 }
                             }
 
-                            Text(
-                                text = "Conditions météo :",
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Bold
+                            OutlinedTextField(
+                                value = terrainNotes,
+                                onValueChange = { terrainNotes = it },
+                                label = { Text("Note parcours / boue", maxLines = 1) },
+                                placeholder = { Text("Ex: Sous-bois glissant") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
                             )
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                listOf("Soleil", "Nuageux", "Pluie", "Vent / Frais").forEach { wCond ->
-                                    val isSelected = weatherCondition == wCond
-                                    Surface(
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .height(34.dp)
-                                            .clip(RoundedCornerShape(9.dp))
-                                            .clickable { weatherCondition = wCond }
-                                            .testTag("weather_chip_$wCond"),
-                                        shape = RoundedCornerShape(9.dp),
-                                        color = if (isSelected) {
-                                            SemoisRiverTeal
-                                        } else {
-                                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
-                                        }
-                                    ) {
-                                        Box(contentAlignment = Alignment.Center) {
-                                            Text(
-                                                text = wCond,
-                                                style = MaterialTheme.typography.labelSmall,
-                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                                color = if (isSelected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis
-                                            )
-                                        }
-                                    }
-                                }
-                            }
 
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                OutlinedTextField(
-                                    value = temperatureInput,
-                                    onValueChange = { temperatureInput = it },
-                                    label = { Text("Temp. (°C)", maxLines = 1) },
-                                    singleLine = true,
-                                    modifier = Modifier.weight(0.35f)
-                                )
-                                OutlinedTextField(
-                                    value = terrainNotes,
-                                    onValueChange = { terrainNotes = it },
-                                    label = { Text("Note parcours / boue", maxLines = 1) },
-                                    placeholder = { Text("Ex: Sous-bois glissant") },
-                                    singleLine = true,
-                                    modifier = Modifier.weight(0.65f)
-                                )
-                            }
-
-                            Surface(
+                            if (canPlanInSimulator) Surface(
                                 shape = RoundedCornerShape(12.dp),
                                 color = if (isPlannedSimulator) {
                                     CountingTop15BadgeGreen.copy(alpha = 0.12f)
@@ -759,10 +652,8 @@ fun RaceDetailModalScreen(
                                     onSaveRaceTerrainAndWeather(
                                         activeProfileId,
                                         terrainCondition,
-                                        weatherCondition,
-                                        temperatureInput.toIntOrNull(),
                                         terrainNotes,
-                                        isPlannedSimulator,
+                                        isPlannedSimulator && canPlanInSimulator,
                                         distanceKm,
                                         simulatedTargetPointsInput.toIntOrNull() ?: averagePointsForDistance
                                     )
@@ -774,7 +665,7 @@ fun RaceDetailModalScreen(
                                     .testTag("save_terrain_weather_button")
                             ) {
                                 Text(
-                                    text = "Enregistrer Météo, Terrain & Simulateur",
+                                    text = "Enregistrer",
                                     fontWeight = FontWeight.Bold,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
@@ -792,6 +683,8 @@ fun RaceDetailModalScreen(
 private fun OfficialMyChronoResultCard(
     runnerName: String,
     distanceKm: Int,
+    distanceName: String = "$distanceKm km",
+    isChallenge: Boolean = true,
     result: RaceResultEntity?,
     pronosticEntry: GaumeRacePronosticEntry? = null,
     isCountingInTop15: Boolean,
@@ -820,11 +713,11 @@ private fun OfficialMyChronoResultCard(
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = if (result != null) {
-                            "Résultat Officiel MyChrono • $distanceKm km"
+                            "Résultat officiel MyChrono • $distanceName"
                         } else if (pronosticEntry != null) {
-                            "Pronostic Avant-Course • $distanceKm km"
+                            "Pronostic avant-course • $distanceName"
                         } else {
-                            "Résultat & Dossard • $distanceKm km"
+                            "Résultat & dossard • $distanceName"
                         },
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.ExtraBold,
@@ -833,11 +726,11 @@ private fun OfficialMyChronoResultCard(
                     )
                     Text(
                         text = if (result != null) {
-                            "$runnerName • ${result.distanceLabel} • Dossard #${result.bibNumber}"
+                            "$runnerName • $distanceName • Dossard #${result.bibNumber}"
                         } else if (pronosticEntry != null) {
-                            "$runnerName • Basé sur tes 3 dernières courses (${pronosticEntry.recentAveragePaceFormatted})"
+                            "$runnerName • Forme ${pronosticEntry.recentAveragePaceFormatted} (parcours moyen)"
                         } else {
-                            "$runnerName • Aucun résultat $distanceKm km enregistré"
+                            "$runnerName • Aucun résultat sur le $distanceName"
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -846,11 +739,23 @@ private fun OfficialMyChronoResultCard(
                     )
                 }
                 Spacer(modifier = Modifier.width(6.dp))
-                Top15StatusBadge(
-                    isCountingInTop15 = isCountingInTop15,
-                    rankAmongRunnerRaces = rankAmongMyRaces,
-                    distanceLabel = "$distanceKm km"
-                )
+                if (isChallenge) {
+                    Top15StatusBadge(
+                        isCountingInTop15 = isCountingInTop15,
+                        rankAmongRunnerRaces = rankAmongMyRaces,
+                        distanceLabel = "$distanceKm km"
+                    )
+                } else {
+                    Surface(shape = RoundedCornerShape(8.dp), color = MaterialTheme.colorScheme.tertiaryContainer) {
+                        Text(
+                            text = "Ne compte pas",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onTertiaryContainer,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+                }
             }
 
             if (pronosticEntry != null) {
@@ -866,7 +771,11 @@ private fun OfficialMyChronoResultCard(
                         .clickable { onExpandBibSearch() }
                 ) {
                     Text(
-                        text = "Aucun résultat MyChrono trouvé sur le $distanceKm km pour cette manche. Utilisez l'encart « Dossard & Recherche MyChrono » ci-dessous pour chercher votre dossard.",
+                        text = if (isChallenge) {
+                            "Aucun résultat MyChrono trouvé sur le $distanceName pour cette manche. Utilisez l'encart « Dossard & Recherche MyChrono » ci-dessous pour chercher votre dossard."
+                        } else {
+                            "Aucun résultat MyChrono sur le $distanceName. Les résultats hors challenge apparaissent quand MyChrono les publie ; un dossard du jour peut être saisi ci-dessous."
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(12.dp)
@@ -880,7 +789,7 @@ private fun OfficialMyChronoResultCard(
                     DetailHighlightBox(
                         label = "Temps Officiel",
                         value = result.officialTimeFormatted,
-                        sub = result.distanceLabel,
+                        sub = result.distanceName ?: result.distanceLabel,
                         accent = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.weight(1f)
                     )
@@ -892,10 +801,10 @@ private fun OfficialMyChronoResultCard(
                         modifier = Modifier.weight(1f)
                     )
                     DetailHighlightBox(
-                        label = "Points (${result.distanceLabel})",
-                        value = "${result.challengePoints} pts",
-                        sub = if (isCountingInTop15) "Retenu Top 15" else "Hors Top 15",
-                        accent = if (isCountingInTop15) CountingTop15BadgeGreen else ClayTerracotta,
+                        label = if (isChallenge) "Points (${result.distanceLabel})" else "Challenge",
+                        value = if (isChallenge) "${result.challengePoints} pts" else "—",
+                        sub = if (!isChallenge) "Hors challenge" else if (isCountingInTop15) "Retenu Top 15" else "Hors Top 15",
+                        accent = if (isChallenge && isCountingInTop15) CountingTop15BadgeGreen else ClayTerracotta,
                         modifier = Modifier.weight(1f)
                     )
                 }
@@ -1028,7 +937,7 @@ private fun TrioRaceComparisonSection(
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Text(
-                text = "Comparaison Trio sur cette manche",
+                text = "Le Trio sur cette course",
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.Bold,
                 maxLines = 1
@@ -1088,7 +997,7 @@ private fun TrioRaceComparisonSection(
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(
-                                    text = "${profile.displayName.substringBefore(" ")} (${r.distanceLabel})",
+                                    text = "${profile.displayName.substringBefore(" ")} (${r.distanceName ?: r.distanceLabel})",
                                     style = MaterialTheme.typography.bodySmall,
                                     fontWeight = FontWeight.SemiBold,
                                     maxLines = 1,
@@ -1101,7 +1010,8 @@ private fun TrioRaceComparisonSection(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(
-                                    text = "#${r.bibNumber} • ${r.officialTimeFormatted} • ${r.challengePoints} pts",
+                                    text = "#${r.bibNumber} • ${r.officialTimeFormatted}" +
+                                        if (raceItem.race.isChallenge) " • ${r.challengePoints} pts" else "",
                                     style = MaterialTheme.typography.labelMedium,
                                     fontWeight = FontWeight.Bold,
                                     maxLines = 1,

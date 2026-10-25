@@ -37,7 +37,7 @@ private fun formatPoints(points: Int): String = "%,d".format(Locale.FRANCE, poin
 
 /**
  * Classement provisoire du Challenge pour le profil actif sur la distance choisie,
- * avec le coureur juste devant et un récapitulatif du Trio.
+ * avec un récapitulatif du Trio.
  */
 @Composable
 fun ChallengeStandingCard(
@@ -134,35 +134,6 @@ fun ChallengeStandingCard(
                     fontWeight = FontWeight.SemiBold
                 )
 
-                val above = mine.nextAbove
-                val gap = mine.pointsGapToNextAbove
-                val needed = mine.racePointsNeededToPassNext
-                if (above == null || gap == null || needed == null) {
-                    Text(
-                        text = "En tête du classement provisoire !",
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFF1E7E48)
-                    )
-                } else {
-                    Text(
-                        text = "Juste devant : ${above.fullName} (${above.overallRank}e) à ${formatPoints(gap - 1)} pts",
-                        style = MaterialTheme.typography.bodySmall,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        text = when {
-                            needed > 1200 -> "Hors de portée en une seule course (il faudrait ${formatPoints(needed)} pts)."
-                            st.racesCounted >= ChallengeStandingsCalculator.MAX_COUNTING_RACES ->
-                                "Pour passer devant : une course à ${formatPoints(needed)} pts ou plus " +
-                                    "(elle remplacerait ton plus faible résultat compté, ${formatPoints(st.lowestCountedPoints)} pts)."
-                            else -> "Pour passer devant : une course à ${formatPoints(needed)} pts ou plus suffit."
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
             }
 
             val trioLines = profiles.mapNotNull { p ->

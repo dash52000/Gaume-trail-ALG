@@ -63,9 +63,12 @@ import com.example.domain.RunnerChallengeSummary
 import com.example.data.local.RunnerProfileEntity
 import com.example.domain.ProfileChallengeStanding
 import com.example.domain.SameCourseYearComparison
+import com.example.domain.SeasonRecap
+import com.example.domain.VillagePassport
+import com.example.ui.components.SeasonRecapCard
+import com.example.ui.components.VillagePassportCard
 import com.example.ui.components.ChallengeStandingCard
 import com.example.ui.components.EditProfileBibAndDistanceDialog
-import com.example.ui.components.GaumeConquestGamificationCard
 import com.example.ui.components.GaumePerfsAndToolsHubSection
 import com.example.ui.components.GaumePerfsCalculator
 import com.example.ui.components.GaumeRacePronosticEntry
@@ -89,9 +92,15 @@ fun RunnerOverviewScreen(
     perfsSubTab: Int = 0,
     preselectedShareRaceId: String? = null,
     multiSeasonSummaries: Map<Int, RunnerChallengeSummary> = emptyMap(),
-    sameCourseComparisons2026Vs2027: List<SameCourseYearComparison> = emptyList(),
+    sameCourseComparisons: List<SameCourseYearComparison> = emptyList(),
+    comparisonYearA: Int = summary?.seasonYear?.minus(1) ?: 0,
+    comparisonYearB: Int = summary?.seasonYear ?: 0,
     trioStandings: Map<String, Map<Int, ProfileChallengeStanding>> = emptyMap(),
     profiles: List<RunnerProfileEntity> = emptyList(),
+    horsChallengeItems: List<RaceItemWithContext> = emptyList(),
+    passport: VillagePassport? = null,
+    activeRecap: SeasonRecap? = null,
+    trioRecaps: Map<String, SeasonRecap> = emptyMap(),
     onSelectDistanceKm: (Int) -> Unit,
     onSelectFilterMode: (RaceFilterMode) -> Unit,
     onOpenRaceDetail: (String) -> Unit,
@@ -120,7 +129,6 @@ fun RunnerOverviewScreen(
     var showEditBibDialog by remember { mutableStateOf(false) }
 
     val activeDistanceSummary = summary.challengeForDistance(selectedDistanceKm)
-    val activeConquestSummary = summary.conquestForDistance(selectedDistanceKm)
     val seasonPronostics = remember(summary, selectedDistanceKm) {
         GaumePerfsCalculator.computeSeasonPronostics(
             summary = summary,
@@ -181,6 +189,15 @@ fun RunnerOverviewScreen(
         when (activeBottomTab) {
             AlgBottomTab.OVERVIEW -> {
                 // ONGLET 1 : COURSES (Classement provisoire + Pronostic Prochaine Manche + Liste + Filtres rapides)
+                if (activeRecap != null && activeRecap.isSeasonOver && activeRecap.racesRun > 0) {
+                    item {
+                        SeasonOverBanner(
+                            recap = activeRecap,
+                            onOpenRecap = { onOpenPerfsTabWithSubTab(2, null) }
+                        )
+                    }
+                }
+
                 if (activeDistanceSummary.hasAssignedBib) {
                     item {
                         ChallengeStandingCard(
@@ -329,6 +346,20 @@ fun RunnerOverviewScreen(
                         )
                     }
                 }
+
+                // Courses hors challenge : résultats récupérés, jamais comptés pour le challenge.
+                if (horsChallengeItems.isNotEmpty() && raceFilterMode != RaceFilterMode.TOP_15_ONLY) {
+                    item {
+                        HorsChallengeSectionHeader(
+                            seasonYear = summary.seasonYear,
+                            count = horsChallengeItems.size,
+                            runCount = horsChallengeItems.count { it.result10km != null || it.result5km != null }
+                        )
+                    }
+                    items(horsChallengeItems, key = { "hc_${it.race.raceId}" }) { item ->
+                        HorsChallengeRaceCard(item = item, onClick = { onOpenRaceDetail(item.race.raceId) })
+                    }
+                }
             }
 
             AlgBottomTab.PERFS -> {
@@ -353,23 +384,37 @@ fun RunnerOverviewScreen(
                                     activeRunnerName = summary.profile.displayName,
                                     selectedDistanceKm = selectedDistanceKm,
                                     multiSeasonSummaries = multiSeasonSummaries,
-                                    sameCourseComparisons2026Vs2027 = sameCourseComparisons2026Vs2027,
+                                    sameCourseComparisons = sameCourseComparisons,
+                                    comparisonYearA = comparisonYearA,
+                                    comparisonYearB = comparisonYearB,
                                     onSelectDistanceKm = onSelectDistanceKm,
                                     onSelectSeasonYear = onSelectSeasonYear
                                 )
                             }
-                        } else null
+                        } else null,
+                        recapSlot = activeRecap?.let { recap ->
+                            {
+                                SeasonRecapCard(
+                                    recap = recap,
+                                    trioRecaps = trioRecaps,
+                                    profiles = profiles
+                                )
+                            }
+                        }
                     )
                 }
             }
 
             AlgBottomTab.BADGES -> {
-                // ONGLET 4 : BADGES (Passeport Collector, Série Streak, Fiefs & Quêtes du Trio)
+                // ONGLET 4 : PASSEPORT DES VILLAGES (toutes saisons)
                 item {
-                    GaumeConquestGamificationCard(
-                        runnerName = summary.profile.displayName,
-                        conquest = activeConquestSummary
-                    )
+                    if (passport != null) {
+                        VillagePassportCard(
+                            runnerName = summary.profile.displayName,
+                            passport = passport,
+                            onOpenRaceDetail = onOpenRaceDetail
+                        )
+                    }
                 }
             }
 
@@ -380,6 +425,7 @@ fun RunnerOverviewScreen(
     if (showEditBibDialog) {
         EditProfileBibAndDistanceDialog(
             profile = summary.profile,
+            seasonYear = summary.seasonYear,
             onDismiss = { showEditBibDialog = false },
             onConfirm = { name, myChronoId, bib10, bib5, prefDist, club, cat ->
                 showEditBibDialog = false
@@ -1253,5 +1299,132 @@ private fun OverviewMiniStat(
             color = if (isHighlighted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
             maxLines = 1
         )
+    }
+}
+
+@Composable
+private fun SeasonOverBanner(recap: SeasonRecap, onOpenRecap: () -> Unit) {
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = GoldPodium.copy(alpha = 0.16f),
+        border = BorderStroke(1.dp, GoldPodium.copy(alpha = 0.6f)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .clickable { onOpenRecap() }
+            .testTag("season_over_banner")
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(Icons.Default.EmojiEvents, contentDescription = null, tint = GoldPodium, modifier = Modifier.size(20.dp))
+            Spacer(modifier = Modifier.width(8.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Saison ${recap.seasonYear} terminée",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.ExtraBold
+                )
+                Text(
+                    text = (if (recap.challengeComplete) "Challenge ${recap.distanceLabel} validé" else "${recap.countingRaces}/15 courses comptées") +
+                        " • ${recap.racesRun} courses • touchez pour le bilan",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun HorsChallengeSectionHeader(seasonYear: Int, count: Int, runCount: Int) {
+    Column(modifier = Modifier.padding(top = 6.dp)) {
+        Text(
+            text = "Hors challenge $seasonYear ($count)",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.ExtraBold
+        )
+        Text(
+            text = (if (runCount > 0) "$runCount courue(s) • " else "") +
+                "résultats récupérés quand MyChrono les publie, sans effet sur le challenge",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
+private fun HorsChallengeRaceCard(item: RaceItemWithContext, onClick: () -> Unit) {
+    val race = item.race
+    val res = item.result10km ?: item.result5km
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() }
+            .testTag("hors_challenge_card_${race.raceId}"),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Surface(shape = RoundedCornerShape(8.dp), color = MaterialTheme.colorScheme.tertiaryContainer) {
+                Text(
+                    text = "HC",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                )
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = race.title,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = listOfNotNull(
+                        item.gaumeGeo.canonicalVillage,
+                        race.dateIso,
+                        listOfNotNull(race.longDistanceLabel, race.shortDistanceLabel).joinToString(" / ").ifBlank { null }
+                    ).joinToString(" • "),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Spacer(modifier = Modifier.width(6.dp))
+            if (res != null) {
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = res.officialTimeFormatted,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = "${res.distanceName ?: res.distanceLabel} • ${res.overallRank}e/${res.totalFinishers}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else {
+                Text(
+                    text = if (race.isCompleted) "Non courue" else "À venir",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
     }
 }

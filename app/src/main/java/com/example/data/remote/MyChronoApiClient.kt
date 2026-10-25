@@ -21,14 +21,6 @@ import java.util.concurrent.TimeUnit
 import kotlin.math.max
 import kotlin.math.roundToInt
 
-data class MyChronoSeasonSyncPayload(
-    val seasonYear: Int,
-    val updatedRaces: List<RaceEntity>,
-    val rawRowsByRaceId: Map<String, List<MyChronoRawResultRow>>,
-    val discoveredDirectoryEntries: List<MyChronoDirectoryEntry>,
-    val message: String
-)
-
 data class MyChronoRawResultRow(
     val runnerId: String,
     val bibNumber: String,
@@ -44,7 +36,9 @@ data class MyChronoRawResultRow(
     val totalFinishers: Int,
     val categoryRank: Int,
     val categoryTotal: Int,
-    val points: Int
+    val points: Int,
+    /** Libellé réel publié pour la distance (« 10 km », ou « 14 km » sur une course hors challenge). */
+    val distanceName: String = ""
 )
 
 /**
@@ -69,6 +63,19 @@ class MyChronoApiClient(
         fun reglementPointsForRank(rank: Int): Int = (1201 - rank).coerceAtLeast(1)
 
         fun raceIdFor(seasonYear: Int, roundNumber: Int): String = "alg_%d_r%02d".format(seasonYear, roundNumber)
+
+        /**
+         * Courses « Hors challenge » : MyChrono les numérote aussi à partir de 1, d'où un préfixe distinct
+         * (sinon la course hors challenge n°4 écraserait la manche n°4).
+         */
+        fun horsChallengeRaceIdFor(seasonYear: Int, number: Int): String = "alg_%d_h%02d".format(seasonYear, number)
+
+        /** Une course est hors challenge si MyChrono la publie comme course isolée ou dans la compétition « Hors challenge ». */
+        fun isChallengeRace(kind: String, competition: String): Boolean {
+            val k = kind.trim().lowercase(Locale.ROOT)
+            val c = competition.trim().lowercase(Locale.ROOT)
+            return k != "single" && !c.contains("hors challenge")
+        }
     }
 
     private fun getJson(url: String): String? =
@@ -78,59 +85,42 @@ class MyChronoApiClient(
             if (resp.isSuccessful) resp.body?.string().orEmpty() else null
         }
 
-    suspend fun fetchSeasonFromMyChrono(seasonYear: Int): Result<MyChronoSeasonSyncPayload> =
+    /** Calendrier publié d'une saison (manches et courses hors challenge). Liste vide si rien n'est publié. */
+    suspend fun fetchSeasonCalendar(seasonYear: Int): Result<List<RaceEntity>> =
         withContext(Dispatchers.IO) {
             runCatching {
-                val targetYear = max(2026, seasonYear)
-                val body = getJson("$MYCHRONO_PUBLIC_API/races?year=$targetYear")
+                val body = getJson("$MYCHRONO_PUBLIC_API/races?year=$seasonYear")
                     ?: throw IllegalStateException("Serveur MyChrono injoignable")
-                val parsedRaces = parseRacesPayload(body, targetYear)
-
-                val semaphore = Semaphore(6)
-                val fetched = coroutineScope {
-                    parsedRaces
-                        .filter { it.statusLabel != "planned" }
-                        .map { race ->
-                            async {
-                                semaphore.withPermit {
-                                    val rows = runCatching {
-                                        getJson("$MYCHRONO_PUBLIC_API/races/${race.myChronoEventId}/results")
-                                            ?.let { parseResultsPayload(it) }
-                                            .orEmpty()
-                                    }.getOrDefault(emptyList())
-                                    race.raceId to rows
-                                }
-                            }
-                        }.awaitAll()
-                }
-                val rawRowsByRace = fetched.filter { it.second.isNotEmpty() }.toMap()
-
-                val finalRaces = parsedRaces.map { race ->
-                    race.copy(isCompleted = race.isCompleted || rawRowsByRace[race.raceId]?.isNotEmpty() == true)
-                }
-
-                MyChronoSeasonSyncPayload(
-                    seasonYear = targetYear,
-                    updatedRaces = finalRaces,
-                    rawRowsByRaceId = rawRowsByRace,
-                    discoveredDirectoryEntries = buildDirectory(rawRowsByRace.values.flatten()),
-                    message = if (finalRaces.isEmpty()) {
-                        "MyChrono n'a encore publié aucune manche pour $targetYear."
-                    } else {
-                        "MyChrono $targetYear synchronisé (${finalRaces.size} manches, ${rawRowsByRace.size} classements)."
-                    }
-                )
+                parseRacesPayload(body, seasonYear)
             }
         }
 
-    suspend fun fetchRaceRawResults(myChronoEventId: String): Result<List<MyChronoRawResultRow>> =
+    /** Résultats bruts d'une course (tous les coureurs). */
+    suspend fun fetchRaceRawResults(myChronoEventId: String, isChallenge: Boolean = true): Result<List<MyChronoRawResultRow>> =
         withContext(Dispatchers.IO) {
             runCatching {
-                getJson("$MYCHRONO_PUBLIC_API/races/$myChronoEventId/results")
-                    ?.let { parseResultsPayload(it) }
-                    .orEmpty()
+                val body = getJson("$MYCHRONO_PUBLIC_API/races/$myChronoEventId/results")
+                    ?: throw IllegalStateException("Résultats MyChrono injoignables")
+                parseResultsPayload(body, isChallenge)
             }
         }
+
+    /** Plusieurs courses en parallèle (6 à la fois) ; une course en échec est simplement absente du résultat. */
+    suspend fun fetchManyRaceResults(races: List<RaceEntity>): Map<String, List<MyChronoRawResultRow>> =
+        coroutineScope {
+            val semaphore = Semaphore(6)
+            races.map { race ->
+                async {
+                    semaphore.withPermit {
+                        race.raceId to fetchRaceRawResults(race.myChronoEventId, race.isChallenge).getOrNull()
+                    }
+                }
+            }.awaitAll()
+                .mapNotNull { (raceId, rows) -> rows?.let { raceId to it } }
+                .toMap()
+        }
+
+    fun buildDirectoryFromRows(rows: List<MyChronoRawResultRow>): List<MyChronoDirectoryEntry> = buildDirectory(rows)
 
     private fun buildDirectory(rows: List<MyChronoRawResultRow>): List<MyChronoDirectoryEntry> {
         val byKey = LinkedHashMap<String, MyChronoDirectoryEntry>()
@@ -153,20 +143,31 @@ class MyChronoApiClient(
     }
 
     /**
-     * Résultats d'un profil sur une manche, séparément pour le 10 km et le 5 km.
-     * - Une distance n'est cherchée que si le profil y a un dossard (par défaut ou saisi pour cette manche).
-     * - La recherche se fait UNIQUEMENT dans les résultats de cette distance (les dossards sont propres à chaque distance).
-     * - Ordre : identifiant MyChrono du coureur, puis dossard. Un dossard porté par un autre identifiant
+     * Résultats d'un profil sur une course, séparément pour le 10 km et le 5 km.
+     * Les dossards du profil sont ceux de la saison de la course.
+     *
+     * Manche du challenge, dossards de la saison renseignés :
+     * - une distance n'est cherchée que si le profil y a un dossard (de la saison ou saisi pour cette manche) ;
+     * - la recherche se fait UNIQUEMENT dans les résultats de cette distance ;
+     * - ordre : identifiant MyChrono du coureur, puis dossard. Un dossard porté par un autre identifiant
      *   MyChrono n'est pas attribué, sauf s'il a été saisi explicitement pour cette manche.
+     *
+     * Manche d'une saison sans dossards renseignés (2025, ou début 2027) : seul l'identifiant MyChrono compte.
+     *
+     * Course hors challenge : identifiant MyChrono, ou dossard saisi pour cette course ; jamais le dossard
+     * de la saison (il n'est pas valable sur ces courses). Les points ne comptent pas (0).
      */
     fun findMatchingResultsForProfile(
         raceId: String,
         seasonYear: Int,
         profile: RunnerProfileEntity,
         raceOverride: RaceBibOverrideEntity?,
-        rawRows: List<MyChronoRawResultRow>
+        rawRows: List<MyChronoRawResultRow>,
+        isChallenge: Boolean = true,
+        seasonBibsDeclared: Boolean = true
     ): List<RaceResultEntity> {
         if (rawRows.isEmpty()) return emptyList()
+        fun entity(row: MyChronoRawResultRow) = toRaceResultEntity(raceId, seasonYear, profile.profileId, row, isChallenge)
 
         if (raceOverride != null && raceOverride.bibNumber.isNotBlank()) {
             val label = if (raceOverride.distanceKm == 5) LABEL_5KM else LABEL_10KM
@@ -176,7 +177,15 @@ class MyChronoApiClient(
                 bib = raceOverride.bibNumber,
                 bibIsExplicitForThisRace = true
             )
-            return listOfNotNull(row?.let { toRaceResultEntity(raceId, seasonYear, profile.profileId, it) })
+            return listOfNotNull(row?.let { entity(it) })
+        }
+
+        val runnerId = profile.myChronoRunnerId.trim()
+        if (!isChallenge || !seasonBibsDeclared) {
+            if (runnerId.isBlank()) return emptyList()
+            return listOf(LABEL_10KM, LABEL_5KM).mapNotNull { label ->
+                rawRows.firstOrNull { it.distanceLabel == label && it.runnerId == runnerId }?.let { entity(it) }
+            }
         }
 
         return listOf(LABEL_10KM to profile.defaultBib10km, LABEL_5KM to profile.defaultBib5km)
@@ -184,10 +193,10 @@ class MyChronoApiClient(
             .mapNotNull { (label, bib) ->
                 findRowInDistance(
                     rows = rawRows.filter { it.distanceLabel == label },
-                    runnerId = profile.myChronoRunnerId,
+                    runnerId = runnerId,
                     bib = bib,
                     bibIsExplicitForThisRace = false
-                )?.let { toRaceResultEntity(raceId, seasonYear, profile.profileId, it) }
+                )?.let { entity(it) }
             }
     }
 
@@ -215,7 +224,8 @@ class MyChronoApiClient(
         raceId: String,
         seasonYear: Int,
         profileId: String,
-        row: MyChronoRawResultRow
+        row: MyChronoRawResultRow,
+        isChallenge: Boolean
     ): RaceResultEntity {
         val paceSecPerKm = (row.timeSeconds / row.distanceKm).roundToInt()
         val speedKmh = ((row.distanceKm / (row.timeSeconds / 3600.0)) * 100.0).roundToInt() / 100.0
@@ -233,30 +243,52 @@ class MyChronoApiClient(
             totalFinishers = row.totalFinishers,
             categoryRank = row.categoryRank,
             categoryTotal = row.categoryTotal,
-            challengePoints = row.points
+            challengePoints = if (isChallenge) row.points else 0,
+            distanceName = row.distanceName.ifBlank { row.distanceLabel },
+            distanceKm = row.distanceKm
         )
     }
 
-    private data class ChallengeDistance(val label: String, val km: Double)
+    /** Distance adulte d'une course, rangée en grande distance ("10 km") ou petite distance ("5 km"). */
+    data class DistanceSlot(val label: String, val name: String, val km: Double)
 
-    /** Distances adultes du challenge d'une manche, indexées par id MyChrono. Les distances enfants sont ignorées. */
-    private fun parseChallengeDistances(distArr: JSONArray?): Map<Int, ChallengeDistance> {
+    /**
+     * Distances adultes d'une course, indexées par id MyChrono. Les distances enfants sont ignorées.
+     * Manche du challenge : « 10 km » et « 5 km » selon le libellé.
+     * Hors challenge : la plus longue occupe la place du 10 km, la suivante celle du 5 km.
+     */
+    fun parseDistanceSlots(distArr: JSONArray?, isChallenge: Boolean = true): Map<Int, DistanceSlot> {
         if (distArr == null) return emptyMap()
         data class Adult(val id: Int, val label: String, val km: Double?)
         val adults = (0 until distArr.length()).mapNotNull { i ->
             val d = distArr.optJSONObject(i) ?: return@mapNotNull null
             val kind = d.optString("kind").lowercase(Locale.ROOT)
-            val label = d.optString("label")
+            val label = d.optString("label").trim()
             val lower = label.lowercase(Locale.ROOT)
-            if (kind == "kids" || lower.contains("jeune") || lower.contains("enfant")) return@mapNotNull null
+            if (kind == "kids" || lower.contains("jeune") || lower.contains("enfant") || lower.contains("marche")) {
+                return@mapNotNull null
+            }
+            if (d.optBoolean("noTime", false)) return@mapNotNull null
             val meters = listOf("effective", "real", "length")
                 .firstNotNullOfOrNull { key -> d.optInt(key, 0).takeIf { it > 0 } }
             Adult(d.optInt("id", -1), label, meters?.let { (it / 100.0).roundToInt() / 10.0 })
         }
         if (adults.isEmpty()) return emptyMap()
 
+        if (!isChallenge) {
+            val withKm = adults.filter { it.km != null }.sortedByDescending { it.km!! }
+            if (withKm.isEmpty()) return emptyMap()
+            if (withKm.size == 1) {
+                val a = withKm.first()
+                return mapOf(a.id to DistanceSlot(if (a.km!! < 7.2) LABEL_5KM else LABEL_10KM, a.label, a.km))
+            }
+            return withKm.take(2).mapIndexed { idx, a ->
+                a.id to DistanceSlot(if (idx == 0) LABEL_10KM else LABEL_5KM, a.label, a.km!!)
+            }.toMap()
+        }
+
         fun labelFor(a: Adult): String? {
-            val lbl = a.label.trim().lowercase(Locale.ROOT)
+            val lbl = a.label.lowercase(Locale.ROOT)
             return when {
                 Regex("^10\\b").containsMatchIn(lbl) -> LABEL_10KM
                 Regex("^5\\b").containsMatchIn(lbl) -> LABEL_5KM
@@ -270,7 +302,7 @@ class MyChronoApiClient(
         return adults.mapNotNull { a ->
             val label = labelFor(a) ?: return@mapNotNull null
             val km = a.km ?: return@mapNotNull null
-            a.id to ChallengeDistance(label, km)
+            a.id to DistanceSlot(label, a.label.ifBlank { label }, km)
         }.toMap()
     }
 
@@ -295,17 +327,20 @@ class MyChronoApiClient(
             if (eventId.isBlank() || roundNumber <= 0 || dateIso.length != 10) continue
             if (item.has("year") && item.optInt("year") != seasonYear) continue
 
+            val isChallenge = isChallengeRace(item.optString("kind"), item.optString("competition"))
             val place = item.optString("place").trim()
             val name = item.optString("name").trim()
             val title = when {
                 name.isNotBlank() && !name.equals(place, ignoreCase = true) && place.isNotBlank() -> "$place — $name"
                 name.isNotBlank() -> name
-                else -> place.ifBlank { "Manche $roundNumber" }
+                else -> place.ifBlank { if (isChallenge) "Manche $roundNumber" else "Course hors challenge" }
             }
 
-            val distances = parseChallengeDistances(item.optJSONArray("distances")).values
-            val long = distances.firstOrNull { it.label == LABEL_10KM }?.km
-            val short = distances.firstOrNull { it.label == LABEL_5KM }?.km
+            val distances = parseDistanceSlots(item.optJSONArray("distances"), isChallenge).values
+            val longSlot = distances.firstOrNull { it.label == LABEL_10KM }
+            val shortSlot = distances.firstOrNull { it.label == LABEL_5KM }
+            val long = longSlot?.km
+            val short = shortSlot?.km
 
             val info = item.optJSONObject("info")
             val facilities = info?.optJSONObject("facilities")
@@ -328,7 +363,7 @@ class MyChronoApiClient(
 
             list.add(
                 RaceEntity(
-                    raceId = raceIdFor(seasonYear, roundNumber),
+                    raceId = if (isChallenge) raceIdFor(seasonYear, roundNumber) else horsChallengeRaceIdFor(seasonYear, roundNumber),
                     seasonYear = seasonYear,
                     roundNumber = roundNumber,
                     myChronoEventId = eventId,
@@ -353,11 +388,15 @@ class MyChronoApiClient(
                     routeLinks = routeLinks,
                     sourceUrl = txt("source"),
                     statusLabel = status,
-                    finishersCount = item.optInt("finishers", 0).takeIf { it > 0 }
+                    finishersCount = item.optInt("finishers", 0).takeIf { it > 0 },
+                    isChallenge = isChallenge,
+                    competitionLabel = item.optString("competition").trim().ifBlank { null },
+                    longDistanceLabel = if (isChallenge) null else longSlot?.name,
+                    shortDistanceLabel = if (isChallenge) null else shortSlot?.name
                 )
             )
         }
-        return list.sortedBy { it.roundNumber }
+        return list.sortedWith(compareBy<RaceEntity>({ !it.isChallenge }, { it.roundNumber }))
     }
 
     /**
@@ -365,11 +404,12 @@ class MyChronoApiClient(
      * { "race": { "distances": [...] }, "results": [ { "distanceId": 4, "rows": [...] }, ... ] }.
      * Un format non reconnu donne une liste vide (aucun classement deviné).
      */
-    fun parseResultsPayload(jsonText: String): List<MyChronoRawResultRow> {
+    fun parseResultsPayload(jsonText: String, isChallenge: Boolean = true): List<MyChronoRawResultRow> {
         val root = runCatching { JSONObject(jsonText.trim()) }.getOrNull() ?: return emptyList()
         val groups = root.optJSONArray("results") ?: return emptyList()
-        val distances = parseChallengeDistances(
-            root.optJSONObject("race")?.optJSONArray("distances") ?: root.optJSONArray("distances")
+        val distances = parseDistanceSlots(
+            root.optJSONObject("race")?.optJSONArray("distances") ?: root.optJSONArray("distances"),
+            isChallenge
         )
 
         val rows = mutableListOf<MyChronoRawResultRow>()
@@ -428,7 +468,8 @@ class MyChronoApiClient(
                         totalFinishers = totalInDistance,
                         categoryRank = p.catRank.takeIf { it > 0 } ?: positionInCategory,
                         categoryTotal = totalByCategory[p.cat] ?: 1,
-                        points = p.points
+                        points = p.points,
+                        distanceName = dist.name
                     )
                 )
             }

@@ -134,14 +134,14 @@ fun SettingsAndAssociationScreen(
                             Spacer(modifier = Modifier.width(8.dp))
                             Column {
                                 Text(
-                                    text = "Attribution des Dossards (10 km & 5 km)",
+                                    text = "Dossards de la saison $selectedSeasonYear (10 km & 5 km)",
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.ExtraBold,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
-                                    text = "Laissez un champ vide (« Aucun ») si le coureur ne fait pas ce challenge (affichera 0 course).",
+                                    text = "Les dossards changent chaque saison. Laissez un champ vide si le coureur ne fait pas ce challenge. Saison sans dossards saisis : les résultats sont retrouvés par l'identifiant MyChrono.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -189,12 +189,12 @@ fun SettingsAndAssociationScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text(
-                        text = "Synchronisation Officielle MyChrono ($selectedSeasonYear)",
+                        text = "Synchronisation MyChrono",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.ExtraBold
                     )
                     Text(
-                        text = "Seuls les challenges ayant un numéro de dossard attribué sont synchronisés. Toute distance sans dossard affiche strictement 0 course et 0 point.",
+                        text = "Toutes les saisons depuis 2025. Seules les courses nouvelles ou des 3 dernières semaines sont téléchargées ; « Tout retélécharger » reprend tous les classements.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -239,7 +239,7 @@ fun SettingsAndAssociationScreen(
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = "Purger & Recalculer",
+                                text = "Tout retélécharger",
                                 fontWeight = FontWeight.Bold,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
@@ -390,6 +390,7 @@ fun SettingsAndAssociationScreen(
     profileBeingEditedInModal?.let { targetProfile ->
         EditProfileBibAndDistanceDialog(
             profile = targetProfile,
+            seasonYear = selectedSeasonYear,
             onDismiss = { profileBeingEditedInModal = null },
             onConfirm = { name, myChronoId, bib10, bib5, prefDist, club, cat ->
                 profileBeingEditedInModal = null

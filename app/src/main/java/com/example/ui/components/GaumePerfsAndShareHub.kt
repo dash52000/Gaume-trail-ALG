@@ -215,25 +215,28 @@ object GaumePerfsCalculator {
     }
 
     /**
-     * Pronostics des prochaines manches, calculés UNIQUEMENT à partir des 3 dernières courses courues :
-     * allure moyenne réelle × longueur réelle du prochain parcours.
-     * Le D+ des parcours à venir n'étant pas publié, il n'est pas pris en compte.
+     * Pronostics des prochaines manches.
+     * Forme = médiane des allures corrigées du parcours des 3 dernières courses courues
+     * (allure ÷ indice de difficulté du parcours, calculé sur le peloton).
+     * Allure prévue = forme × indice du parcours à venir (celui de son édition précédente),
+     * temps prévu = allure prévue × longueur réelle publiée. Sans indice connu, le parcours est
+     * traité comme un parcours moyen, et c'est indiqué.
+     * En début de saison, sans course courue, la forme de fin de saison précédente sert de base.
      */
     fun computeSeasonPronostics(
         summary: RunnerChallengeSummary,
         selectedDistanceKm: Int
     ): GaumeSeasonPronosticsSummary {
         val distSummary = summary.challengeForDistance(selectedDistanceKm)
-        val sortedItems = summary.racesWithContext.sortedBy { it.race.roundNumber }
+        val sortedItems = summary.racesWithContext.sortedWith(
+            compareBy<RaceItemWithContext>({ it.race.dateIso }, { it.race.roundNumber })
+        )
+        val formPoints = com.example.domain.SeasonInsightsCalculator.formPoints(summary, selectedDistanceKm)
+        val recentLast3 = formPoints.takeLast(3)
+        val formPace = com.example.domain.SeasonInsightsCalculator.currentFormPace(formPoints)
+            ?: summary.fallbackFormPaceForDistance(selectedDistanceKm)
 
-        val completedTriples = sortedItems.mapNotNull { item ->
-            val res = item.resultForDistance(selectedDistanceKm) ?: return@mapNotNull null
-            val pace = actualPaceSecPerKm(item, selectedDistanceKm) ?: return@mapNotNull null
-            Triple(item, res, pace)
-        }
-        val recentLast3 = completedTriples.takeLast(3)
-
-        if (recentLast3.isEmpty()) {
+        if (formPace == null || formPace <= 0) {
             return GaumeSeasonPronosticsSummary(
                 distanceKm = selectedDistanceKm,
                 distanceLabel = distSummary.distanceLabel,
@@ -253,36 +256,40 @@ object GaumePerfsCalculator {
             )
         }
 
-        val recentPaceSec = recentLast3.map { it.third }.average().roundToInt()
-        val recentPaceStr = "${formatSecondsToMmSs(recentPaceSec)} /km"
-        val recentSpeedKmh = ((3600.0 / recentPaceSec) * 10.0).roundToInt() / 10.0
+        val formPaceStr = "${formatSecondsToMmSs(formPace)} /km"
+        val formSpeedKmh = ((3600.0 / formPace) * 10.0).roundToInt() / 10.0
+        val itemsById = sortedItems.associateBy { it.race.raceId }
 
-        val recentReferenceRaces = recentLast3.reversed().map { (item, res, paceSec) ->
+        val recentReferenceRaces = recentLast3.reversed().map { p ->
             GaumeRecentReferenceRace(
-                raceId = item.race.raceId,
-                roundNumber = item.race.roundNumber,
-                villageName = item.gaumeGeo.canonicalVillage,
-                dateIso = item.race.dateIso,
-                officialTimeFormatted = res.officialTimeFormatted,
-                pacePerKmFormatted = res.pacePerKmFormatted,
-                elevationGainMeters = knownElevation(item, selectedDistanceKm),
-                paceUsedFormatted = "${formatSecondsToMmSs(paceSec)} /km"
+                raceId = p.raceId,
+                roundNumber = p.roundNumber,
+                villageName = p.village,
+                dateIso = p.dateIso,
+                officialTimeFormatted = p.timeFormatted,
+                pacePerKmFormatted = "${formatSecondsToMmSs(p.paceSecPerKm)} /km",
+                elevationGainMeters = itemsById[p.raceId]?.let { knownElevation(it, selectedDistanceKm) },
+                paceUsedFormatted = "${formatSecondsToMmSs(p.correctedPaceSecPerKm ?: p.paceSecPerKm)} /km" +
+                    (p.factor?.let { " (parcours ${com.example.domain.CourseDifficultyCalculator.formatFactor(it)})" } ?: " (parcours sans indice)")
             )
         }
 
-        val maxCompletedRound = completedTriples.maxOf { it.first.race.roundNumber }
-
+        val lastRunDate = formPoints.lastOrNull()?.dateIso ?: ""
         val upcomingItems = sortedItems.filter { targetItem ->
             targetItem.resultForDistance(selectedDistanceKm) == null &&
                 !targetItem.race.isCompleted &&
-                targetItem.race.roundNumber > maxCompletedRound
+                targetItem.race.dateIso >= lastRunDate
         }
 
         val upcomingList = upcomingItems.mapNotNull { targetItem ->
             // Sans longueur publiée, pas de pronostic (on ne suppose pas « 5 km » ou « 10 km » pile).
             val realKm = realDistanceKm(targetItem, selectedDistanceKm) ?: return@mapNotNull null
-            val predictedTimeSec = (recentPaceSec * realKm).roundToInt()
+            val factor = targetItem.bestKnownFactorForDistance(selectedDistanceKm)
+            val predictedPace = (formPace * (factor ?: 1.0)).roundToInt()
+            val predictedTimeSec = (predictedPace * realKm).roundToInt()
             val predictedTimeStr = formatSecondsToMmSs(predictedTimeSec)
+            val predictedPaceStr = "${formatSecondsToMmSs(predictedPace)} /km"
+            val factorLabel = factor?.let { com.example.domain.CourseDifficultyCalculator.formatFactor(it) }
 
             GaumeRacePronosticEntry(
                 raceId = targetItem.race.raceId,
@@ -292,13 +299,13 @@ object GaumePerfsCalculator {
                 dateIso = targetItem.race.dateIso,
                 distanceKm = realKm,
                 elevationGainMeters = knownElevation(targetItem, selectedDistanceKm),
-                terrainCondition = targetItem.terrainWeather?.terrainCondition,
-                recentAveragePaceSecPerKm = recentPaceSec,
-                recentAveragePaceFormatted = recentPaceStr,
+                terrainCondition = targetItem.terrainWeather?.terrainCondition?.ifBlank { null },
+                recentAveragePaceSecPerKm = formPace,
+                recentAveragePaceFormatted = formPaceStr,
                 predictedTimeSeconds = predictedTimeSec,
                 predictedTimeFormatted = predictedTimeStr,
-                predictedPaceSecPerKm = recentPaceSec,
-                predictedPaceFormatted = recentPaceStr,
+                predictedPaceSecPerKm = predictedPace,
+                predictedPaceFormatted = predictedPaceStr,
                 actualTimeSeconds = null,
                 actualTimeFormatted = null,
                 actualPaceFormatted = null,
@@ -306,7 +313,8 @@ object GaumePerfsCalculator {
                 deltaSeconds = null,
                 deltaFormatted = null,
                 verdict = GaumeRacePronosticVerdict.UPCOMING,
-                verdictLabel = "Pronostic : $predictedTimeStr ($recentPaceStr)",
+                verdictLabel = "Pronostic : $predictedTimeStr ($predictedPaceStr) • " +
+                    (factorLabel?.let { "parcours $it" } ?: "parcours sans indice connu"),
                 verdictShortBadge = "Prévu ~$predictedTimeStr"
             )
         }
@@ -315,9 +323,9 @@ object GaumePerfsCalculator {
             distanceKm = selectedDistanceKm,
             distanceLabel = distSummary.distanceLabel,
             hasAssignedBib = distSummary.hasAssignedBib,
-            recentAveragePaceSecPerKm = recentPaceSec,
-            recentAveragePaceFormatted = recentPaceStr,
-            recentAverageSpeedKmh = recentSpeedKmh,
+            recentAveragePaceSecPerKm = formPace,
+            recentAveragePaceFormatted = formPaceStr,
+            recentAverageSpeedKmh = formSpeedKmh,
             recentReferenceRaces = recentReferenceRaces,
             nextUpcomingPronostic = upcomingList.firstOrNull(),
             completedWithVerdict = emptyList(),
@@ -663,7 +671,8 @@ fun GaumePerfsAndToolsHubSection(
     activeSubTab: Int = 0,
     onSelectSubTab: (Int) -> Unit = {},
     statsSlot: @Composable () -> Unit = {},
-    seasonsSlot: (@Composable () -> Unit)? = null
+    seasonsSlot: (@Composable () -> Unit)? = null,
+    recapSlot: (@Composable () -> Unit)? = null
 ) {
     val activeDistanceSummary = summary.summaryForDistance(selectedDistanceKm)
     val personalRecords = remember(activeDistanceSummary, summary.racesWithContext) {
@@ -689,9 +698,9 @@ fun GaumePerfsAndToolsHubSection(
     ) {
         // Barre de sous-vues épurée : [Pronostics] [Records] [Carte Bilan] [Saisons]
         val subTabs = buildList {
-            add(0 to "Pronostics")
+            add(0 to "Forme")
             add(1 to "Records (${personalRecords.completedCount})")
-            add(2 to "Carte Bilan")
+            add(2 to "Bilan")
             if (seasonsSlot != null) {
                 add(3 to "Saisons")
             }
@@ -747,7 +756,12 @@ fun GaumePerfsAndToolsHubSection(
 
         when (activeSubTab) {
             0 -> {
-                // Sous-vue 1 : Pronostics des prochaines manches à venir basés sur les 3 dernières courses
+                // Sous-vue 1 : forme corrigée du parcours, puis pronostics des prochaines manches
+                FormAndCourseCard(
+                    summary = summary,
+                    selectedDistanceKm = selectedDistanceKm,
+                    onOpenRaceDetail = onOpenRaceDetail
+                )
                 GaumePronosticPrevuVsReelSectionCard(
                     runnerName = summary.profile.displayName,
                     pronosticsSummary = pronosticsSummary,
@@ -824,7 +838,8 @@ fun GaumePerfsAndToolsHubSection(
             }
 
             2 -> {
-                // Sous-vue 3 : Carte Bilan Visuelle Partageable (PNG) & Export CSV/Texte
+                // Sous-vue 3 : bilan de la saison, carte d'une course (PNG) & export CSV
+                recapSlot?.invoke()
                 GaumeShareableFinisherCard(
                     summary = summary,
                     selectedDistanceKm = selectedDistanceKm,
@@ -888,7 +903,7 @@ fun GaumePronosticPrevuVsReelSectionCard(
                         fontWeight = FontWeight.ExtraBold
                     )
                     Text(
-                        text = "$runnerName • Calculés uniquement pour les courses à venir à partir de tes 3 dernières courses",
+                        text = "$runnerName • Ta forme (3 dernières courses, corrigées du parcours) × l'indice du parcours à venir",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -902,7 +917,7 @@ fun GaumePronosticPrevuVsReelSectionCard(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
-                        text = "Aucune course enregistrée sur le Challenge ${pronosticsSummary.distanceLabel} pour le moment. Dès que tu auras couru au moins 1 manche (synchronisée via MyChrono), l'application calculera automatiquement tes pronostics pour toutes les prochaines courses à venir.",
+                        text = "Aucune course courue sur le Challenge ${pronosticsSummary.distanceLabel} pour le moment, ni la saison précédente. Les pronostics apparaîtront après ta première manche.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(12.dp),
@@ -926,7 +941,7 @@ fun GaumePronosticPrevuVsReelSectionCard(
                             verticalArrangement = Arrangement.spacedBy(2.dp)
                         ) {
                             Text(
-                                text = "Allure moyenne récente",
+                                text = "Forme (parcours moyen)",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -937,7 +952,7 @@ fun GaumePronosticPrevuVsReelSectionCard(
                                 color = MaterialTheme.colorScheme.primary
                             )
                             Text(
-                                text = "${pronosticsSummary.recentAverageSpeedKmh} km/h (3 dernières courses)",
+                                text = "${pronosticsSummary.recentAverageSpeedKmh} km/h (médiane des 3 dernières)",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -1982,12 +1997,12 @@ fun GaumeSeasonCsvExportCard(
                 )
                 Column {
                     Text(
-                        text = "Exporter mon Bilan de Saison (CSV / Texte)",
+                        text = "Exporter mes courses (CSV)",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.ExtraBold
                     )
                     Text(
-                        text = "Partagez vos résultats officiels, vos pronostics et vos écarts Prévu vs Réel",
+                        text = "Une ligne par course : chrono, allure, indice du parcours, allure corrigée, points",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -1997,15 +2012,24 @@ fun GaumeSeasonCsvExportCard(
             OutlinedButton(
                 onClick = {
                     val exportText = buildString {
-                        appendLine("=== BILAN CHALLENGE DES ALLURES LIBRES DE GAUME ${summary.seasonYear} ===")
-                        appendLine("Coureur : ${summary.profile.displayName} (Challenge ${distanceSummary.distanceLabel} • Dossard #${distanceSummary.assignedBibNumber})")
-                        appendLine("Score Top 15 : ${distanceSummary.totalChallengePoints} pts (${distanceSummary.countingRacesCount}/15 courses comptabilisées)")
-                        appendLine("Allure moyenne récente (3 dernières courses) : ${pronosticsSummary.recentAveragePaceFormatted}")
-                        appendLine()
-                        appendLine("Manche;Village;Date;Distance_km;D+_m;Pronostic;Chrono_Reel;Ecart;Verdict;Points_ALG")
-                        pronosticsSummary.completedWithVerdict.sortedBy { it.roundNumber }.forEach { e ->
+                        val points = com.example.domain.SeasonInsightsCalculator.formPoints(summary, distanceSummary.distanceKm)
+                        appendLine("Saison;Manche;Date;Village;Course;Distance_km;Chrono;Allure_s_km;Indice_parcours;Allure_corrigee_s_km;Points;Compte_Top15")
+                        points.forEach { p ->
                             appendLine(
-                                "#${e.roundNumber};${e.villageName};${e.dateIso};${"%.1f".format(e.distanceKm)};${e.elevationGainMeters?.let { "+$it" } ?: ""};${e.predictedTimeFormatted};${e.actualTimeFormatted ?: "-"};${e.deltaFormatted ?: "-"};${e.verdictLabel};${e.actualPoints ?: 0}"
+                                listOf(
+                                    summary.seasonYear,
+                                    p.roundNumber,
+                                    p.dateIso,
+                                    p.village,
+                                    p.raceTitle.replace(';', ','),
+                                    "%.2f".format(java.util.Locale.ROOT, p.distanceKm),
+                                    p.timeFormatted,
+                                    p.paceSecPerKm,
+                                    p.factor?.let { "%.3f".format(java.util.Locale.ROOT, it) } ?: "",
+                                    p.correctedPaceSecPerKm ?: "",
+                                    p.points,
+                                    if (p.raceId in distanceSummary.countingRaceIds) "oui" else "non"
+                                ).joinToString(";")
                             )
                         }
                     }
@@ -2026,7 +2050,7 @@ fun GaumeSeasonCsvExportCard(
                     modifier = Modifier.size(16.dp)
                 )
                 Spacer(modifier = Modifier.width(6.dp))
-                Text("Exporter Résultats & Pronostics (${distanceSummary.distanceLabel})")
+                Text("Exporter le ${distanceSummary.distanceLabel} ${summary.seasonYear} (CSV)")
             }
         }
     }
