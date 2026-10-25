@@ -394,7 +394,16 @@ class AlgRepository(
         val race = algDao.getRaceById(raceId)
             ?: return@withContext Result.failure(IllegalStateException("Course introuvable"))
         val cleanBib = bibNumber.trim().removePrefix("#")
-        val cleanDist = if (distanceKm == 5) 5 else 10
+        // Dossard de la saison saisi sur la mauvaise distance (ex. le dossard 5 km tapé alors que
+        // la fiche était sur le 10 km) : on prend la distance de ce dossard.
+        val seasonBib = algDao.getSeasonBibsSnapshot()
+            .firstOrNull { it.profileId == profileId && it.seasonYear == race.seasonYear }
+        val cleanDist = when {
+            seasonBib != null && cleanBib.isNotBlank() && cleanBib == seasonBib.bib5km -> 5
+            seasonBib != null && cleanBib.isNotBlank() && cleanBib == seasonBib.bib10km -> 10
+            distanceKm == 5 -> 5
+            else -> 10
+        }
 
         if (cleanBib.isBlank()) {
             algDao.deleteBibOverride(raceId, profileId)
@@ -410,12 +419,13 @@ class AlgRepository(
         }
         recomputeSeason(race.seasonYear)
 
-        val found = algDao.getAllResultsSnapshot().firstOrNull {
-            it.raceId == raceId && it.profileId == profileId && it.distanceLabel == (if (cleanDist == 5) "5 km" else "10 km")
-        }
+        val mine = algDao.getAllResultsSnapshot().filter { it.raceId == raceId && it.profileId == profileId }
+        val found = mine.firstOrNull { it.distanceLabel == (if (cleanDist == 5) "5 km" else "10 km") } ?: mine.firstOrNull()
         if (found != null) {
             val pts = if (race.isChallenge) " (${found.challengePoints} pts)" else " (hors challenge)"
-            Result.success("Résultat trouvé pour le dossard #${found.bibNumber} : ${found.officialTimeFormatted}$pts")
+            Result.success(
+                "Résultat trouvé sur le ${found.distanceName ?: found.distanceLabel} (dossard #${found.bibNumber}) : ${found.officialTimeFormatted}$pts"
+            )
         } else {
             Result.failure(
                 IllegalStateException("Aucun résultat MyChrono (${race.title}) pour le dossard #$cleanBib sur ${race.distanceNameFor(cleanDist)}.")

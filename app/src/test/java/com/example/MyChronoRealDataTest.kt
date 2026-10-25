@@ -148,13 +148,21 @@ class MyChronoRealDataTest {
     }
 
     @Test
-    fun undeclaredSeason_matchesByMyChronoIdOnly() {
+    fun matching_usesTheMyChronoIdOnBothDistances_evenWithoutBib() {
         val rows = client.parseResultsPayload(race41ResultsJson)
         val noBibs = laetitia.copy(defaultBib10km = "", defaultBib5km = "")
-        val l = client.findMatchingResultsForProfile("alg_2025_r41", 2025, noBibs, null, rows, seasonBibsDeclared = false)
+        val l = client.findMatchingResultsForProfile("alg_2026_r41", 2026, noBibs, null, rows)
         assertEquals("5 km", l.single().distanceLabel)
-        // Même profil, saison où les dossards sont déclarés : sans dossard, rien n'est compté.
-        assertTrue(client.findMatchingResultsForProfile("alg_2026_r41", 2026, noBibs, null, rows).isEmpty())
+
+        // Damien n'a saisi que son dossard 10 km : un 5 km couru sous son identifiant est quand même trouvé.
+        val rows5 = rows.map { if (it.runnerId == "1171") it.copy(distanceLabel = "5 km", bibNumber = "1150") else it }
+        val d = client.findMatchingResultsForProfile("alg_2026_r05", 2026, damien, null, rows5)
+        assertEquals("5 km", d.single().distanceLabel)
+        assertEquals("1150", d.single().bibNumber)
+
+        // Dossard saisi pour la course sur la mauvaise distance : il ne bloque plus le résultat.
+        val wrong = RaceBibOverrideEntity("alg_2026_r05", "me", "1150", 10)
+        assertEquals("5 km", client.findMatchingResultsForProfile("alg_2026_r05", 2026, damien, wrong, rows5).single().distanceLabel)
     }
 
     @Test

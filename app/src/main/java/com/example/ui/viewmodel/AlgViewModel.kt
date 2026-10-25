@@ -177,7 +177,11 @@ class AlgViewModel(
             initialValue = AlgUiState()
         )
 
-    /** Dossards d'un profil pour une saison : ceux saisis, sinon ceux trouvés dans ses résultats MyChrono. */
+    /**
+     * Dossards d'un profil pour une saison, distance par distance : celui saisi, sinon celui porté
+     * dans ses résultats MyChrono de la saison (retrouvés par son identifiant).
+     * Le booléen indique si des dossards ont été saisis pour cette saison.
+     */
     private fun profileForSeason(
         profile: RunnerProfileEntity,
         seasonYear: Int,
@@ -186,14 +190,18 @@ class AlgViewModel(
     ): Pair<RunnerProfileEntity, Boolean> {
         val sb = seasonBibs[profile.profileId to seasonYear]
         val declared = sb != null && (sb.bib10km.isNotBlank() || sb.bib5km.isNotBlank())
-        if (declared) {
-            return profile.copy(defaultBib10km = sb!!.bib10km, defaultBib5km = sb.bib5km) to true
+        fun bibFromResults(label: String): String {
+            val results = challengeResults.filter {
+                it.profileId == profile.profileId && it.seasonYear == seasonYear && it.distanceLabel == label
+            }
+            if (results.isEmpty()) return ""
+            return results.groupingBy { it.bibNumber }.eachCount().maxByOrNull { it.value }?.key
+                ?.ifBlank { null } ?: "—"
         }
-        fun mostUsedBib(label: String): String = challengeResults
-            .filter { it.profileId == profile.profileId && it.seasonYear == seasonYear && it.distanceLabel == label }
-            .groupingBy { it.bibNumber }.eachCount()
-            .maxByOrNull { it.value }?.key.orEmpty()
-        return profile.copy(defaultBib10km = mostUsedBib("10 km"), defaultBib5km = mostUsedBib("5 km")) to false
+        return profile.copy(
+            defaultBib10km = sb?.bib10km?.takeIf { it.isNotBlank() } ?: bibFromResults("10 km"),
+            defaultBib5km = sb?.bib5km?.takeIf { it.isNotBlank() } ?: bibFromResults("5 km")
+        ) to declared
     }
 
     private fun buildUiState(bundle: DataFlowsBundle, ctrl: ControlState): AlgUiState {

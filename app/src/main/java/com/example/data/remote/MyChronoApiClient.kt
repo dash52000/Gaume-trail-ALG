@@ -105,10 +105,18 @@ class MyChronoApiClient(
             }
         }
 
-    /** Plusieurs courses en parallèle (6 à la fois) ; une course en échec est simplement absente du résultat. */
-    suspend fun fetchManyRaceResults(races: List<RaceEntity>): Map<String, List<MyChronoRawResultRow>> =
+    /** Plusieurs courses en parallèle ; une course encore en échec après 2 essais est absente du résultat. */
+    suspend fun fetchManyRaceResults(races: List<RaceEntity>): Map<String, List<MyChronoRawResultRow>> {
+        val first = fetchBatch(races, parallel = 4)
+        val failed = races.filter { it.raceId !in first }
+        if (failed.isEmpty()) return first
+        // Deuxième essai, une course à la fois.
+        return first + fetchBatch(failed, parallel = 1)
+    }
+
+    private suspend fun fetchBatch(races: List<RaceEntity>, parallel: Int): Map<String, List<MyChronoRawResultRow>> =
         coroutineScope {
-            val semaphore = Semaphore(6)
+            val semaphore = Semaphore(parallel)
             races.map { race ->
                 async {
                     semaphore.withPermit {
@@ -144,18 +152,17 @@ class MyChronoApiClient(
 
     /**
      * Résultats d'un profil sur une course, séparément pour le 10 km et le 5 km.
-     * Les dossards du profil sont ceux de la saison de la course.
      *
-     * Manche du challenge, dossards de la saison renseignés :
-     * - une distance n'est cherchée que si le profil y a un dossard (de la saison ou saisi pour cette manche) ;
-     * - la recherche se fait UNIQUEMENT dans les résultats de cette distance ;
-     * - ordre : identifiant MyChrono du coureur, puis dossard. Un dossard porté par un autre identifiant
-     *   MyChrono n'est pas attribué, sauf s'il a été saisi explicitement pour cette manche.
+     * 1. Dossard saisi pour cette course précise : cherché sur sa distance (identifiant puis dossard,
+     *    même porté par un autre identifiant : dossard prêté). S'il n'y est pas, on passe à la suite
+     *    (un dossard saisi sur la mauvaise distance ne bloque plus rien).
+     * 2. Identifiant MyChrono du coureur, sur les deux distances : il est le même au 10 km et au 5 km,
+     *    et d'une saison à l'autre. C'est la règle principale.
+     * 3. Dossard de la saison, uniquement sur une distance où l'identifiant n'a rien donné, et jamais
+     *    s'il est porté par un autre identifiant MyChrono ni sur l'autre distance.
      *
-     * Manche d'une saison sans dossards renseignés (2025, ou début 2027) : seul l'identifiant MyChrono compte.
-     *
-     * Course hors challenge : identifiant MyChrono, ou dossard saisi pour cette course ; jamais le dossard
-     * de la saison (il n'est pas valable sur ces courses). Les points ne comptent pas (0).
+     * Course hors challenge : étapes 1 et 2 seulement (le dossard de la saison n'y est pas valable),
+     * et les points ne comptent pas (0).
      */
     fun findMatchingResultsForProfile(
         raceId: String,
@@ -164,40 +171,39 @@ class MyChronoApiClient(
         raceOverride: RaceBibOverrideEntity?,
         rawRows: List<MyChronoRawResultRow>,
         isChallenge: Boolean = true,
-        seasonBibsDeclared: Boolean = true
+        @Suppress("UNUSED_PARAMETER") seasonBibsDeclared: Boolean = true
     ): List<RaceResultEntity> {
         if (rawRows.isEmpty()) return emptyList()
         fun entity(row: MyChronoRawResultRow) = toRaceResultEntity(raceId, seasonYear, profile.profileId, row, isChallenge)
+        val runnerId = profile.myChronoRunnerId.trim()
 
         if (raceOverride != null && raceOverride.bibNumber.isNotBlank()) {
             val label = if (raceOverride.distanceKm == 5) LABEL_5KM else LABEL_10KM
-            val row = findRowInDistance(
+            findRowInDistance(
                 rows = rawRows.filter { it.distanceLabel == label },
-                runnerId = profile.myChronoRunnerId,
+                runnerId = runnerId,
                 bib = raceOverride.bibNumber,
                 bibIsExplicitForThisRace = true
-            )
-            return listOfNotNull(row?.let { entity(it) })
+            )?.let { return listOf(entity(it)) }
         }
 
-        val runnerId = profile.myChronoRunnerId.trim()
-        if (!isChallenge || !seasonBibsDeclared) {
-            if (runnerId.isBlank()) return emptyList()
-            return listOf(LABEL_10KM, LABEL_5KM).mapNotNull { label ->
-                rawRows.firstOrNull { it.distanceLabel == label && it.runnerId == runnerId }?.let { entity(it) }
-            }
+        val byId = if (runnerId.isBlank()) emptyList() else listOf(LABEL_10KM, LABEL_5KM).mapNotNull { label ->
+            rawRows.firstOrNull { it.distanceLabel == label && it.runnerId == runnerId }
         }
+        if (!isChallenge) return byId.map { entity(it) }
 
-        return listOf(LABEL_10KM to profile.defaultBib10km, LABEL_5KM to profile.defaultBib5km)
-            .filter { (_, bib) -> bib.isNotBlank() }
+        val foundLabels = byId.map { it.distanceLabel }.toSet()
+        val byBib = listOf(LABEL_10KM to profile.defaultBib10km, LABEL_5KM to profile.defaultBib5km)
+            .filter { (label, bib) -> bib.isNotBlank() && label !in foundLabels }
             .mapNotNull { (label, bib) ->
                 findRowInDistance(
                     rows = rawRows.filter { it.distanceLabel == label },
                     runnerId = runnerId,
                     bib = bib,
                     bibIsExplicitForThisRace = false
-                )?.let { entity(it) }
+                )
             }
+        return (byId + byBib).map { entity(it) }
     }
 
     private fun findRowInDistance(

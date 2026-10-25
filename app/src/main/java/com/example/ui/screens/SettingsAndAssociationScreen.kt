@@ -141,7 +141,7 @@ fun SettingsAndAssociationScreen(
                                     overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
-                                    text = "Les dossards changent chaque saison. Laissez un champ vide si le coureur ne fait pas ce challenge. Saison sans dossards saisis : les résultats sont retrouvés par l'identifiant MyChrono.",
+                                    text = "Les résultats sont retrouvés par l'identifiant MyChrono, sur le 10 km comme sur le 5 km. Le dossard de la saison ne sert qu'en secours, si l'identifiant manque.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
