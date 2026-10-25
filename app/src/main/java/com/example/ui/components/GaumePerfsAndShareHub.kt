@@ -404,7 +404,7 @@ object GaumePerfsCalculator {
         val bestCatEntry = bestCat?.let { (item, res) ->
             GaumePersonalRecordEntry(
                 categoryTitle = "Meilleure Place Catégorie",
-                mainValue = "${res.categoryRank}e / ${res.categoryTotal} cat.",
+                mainValue = "${res.categoryRank}e" + (if (res.categoryTotal > 0) " / ${res.categoryTotal}" else "") + " cat.",
                 secondaryValue = "Chrono : ${res.officialTimeFormatted} (${res.pacePerKmFormatted})",
                 villageAndRound = "${item.gaumeGeo.canonicalVillage} (Manche #${item.race.roundNumber})",
                 dateIso = item.race.dateIso,

@@ -76,16 +76,29 @@ fun MyChronoDiagnosticCard(
                     fontWeight = FontWeight.Bold
                 )
                 val published = report?.publishedBySeason.orEmpty()
+                val onPage = report?.onRunnerPageBySeason
                 val found = foundResultCounts[p.profileId].orEmpty()
-                (published.keys + found.keys).sorted().forEach { year ->
+                if (id.isNotBlank() && onPage == null) {
+                    Text(
+                        text = "Fiche coureur MyChrono pas encore lue (lue à chaque synchro)",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                (published.keys + found.keys + onPage.orEmpty().keys).sorted().forEach { year ->
+                    fun expectedFor(label: String) =
+                        maxOf(published[year]?.get(label) ?: 0, onPage?.get(year)?.get(label) ?: 0)
                     val line = listOf("10 km", "5 km").mapNotNull { label ->
                         val pub = published[year]?.get(label) ?: 0
+                        val page = onPage?.get(year)?.get(label)
                         val got = found[year]?.get(label) ?: 0
-                        if (pub == 0 && got == 0) null else "$label : $got retrouvée(s) / $pub publiée(s)"
+                        if (pub == 0 && got == 0 && (page ?: 0) == 0) null
+                        else "$label : $got retrouvée(s)" + (page?.let { " / $it sur la fiche" } ?: "") +
+                            " / $pub dans les classements"
                     }
                     if (line.isNotEmpty()) {
                         val mismatch = listOf("10 km", "5 km").any { label ->
-                            (published[year]?.get(label) ?: 0) > (found[year]?.get(label) ?: 0)
+                            expectedFor(label) > (found[year]?.get(label) ?: 0)
                         }
                         Text(
                             text = "$year — " + line.joinToString(" • "),

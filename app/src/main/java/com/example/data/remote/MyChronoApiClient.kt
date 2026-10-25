@@ -41,6 +41,30 @@ data class MyChronoRawResultRow(
     val distanceName: String = ""
 )
 
+/** Un résultat de la fiche coureur MyChrono (/api/public/runners/{id}). */
+data class MyChronoRunnerResult(
+    /** Identifiant MyChrono de la course (= RaceEntity.myChronoEventId). */
+    val raceEventId: String,
+    val dateIso: String,
+    val distanceName: String,
+    val lengthMeters: Int?,
+    val timeSeconds: Int,
+    val rank: Int,
+    val categoryRank: Int,
+    val category: String,
+    val points: Int,
+    val finishers: Int
+)
+
+/** Fiche coureur MyChrono : identité et toutes ses courses, toutes compétitions confondues. */
+data class MyChronoRunnerPage(
+    val runnerId: String,
+    val name: String,
+    val club: String,
+    val sex: String,
+    val results: List<MyChronoRunnerResult>
+)
+
 /**
  * Client de l'API publique MyChrono (https://mychrono.softalux.com/api/public), qui publie
  * le calendrier et les résultats du Challenge des Allures Libres de Gaume.
@@ -76,6 +100,108 @@ class MyChronoApiClient(
             val c = competition.trim().lowercase(Locale.ROOT)
             return k != "single" && !c.contains("hors challenge")
         }
+
+        private fun nameTokens(name: String): Set<String> =
+            java.text.Normalizer.normalize(name.lowercase(Locale.ROOT), java.text.Normalizer.Form.NFD)
+                .replace(Regex("\\p{InCombiningDiacriticalMarks}+"), "")
+                .split(Regex("[^a-z]+"))
+                .filter { it.length >= 2 }
+                .toSet()
+
+        /**
+         * Même personne d'après le nom : tous les mots du nom du profil se retrouvent dans le nom publié
+         * (« Damien Collet » = « COLLET Damien », « Élodie » = « MARTIN Elodie »).
+         */
+        fun namesMatch(profileName: String, publishedName: String): Boolean {
+            val wanted = nameTokens(profileName)
+            return wanted.isNotEmpty() && nameTokens(publishedName).containsAll(wanted)
+        }
+
+        /**
+         * Distance du challenge ("10 km" / "5 km") d'un résultat de la fiche coureur, avec les mêmes règles
+         * que le classement de la course : libellé publié d'abord, sinon la longueur. Null pour une distance
+         * enfants ou une marche.
+         */
+        fun labelForRunnerResult(race: RaceEntity, result: MyChronoRunnerResult): String? {
+            val name = result.distanceName.trim()
+            val lower = name.lowercase(Locale.ROOT)
+            if (lower.contains("jeune") || lower.contains("enfant") || lower.contains("marche")) return null
+            if (!race.isChallenge) {
+                if (race.longDistanceLabel != null && name == race.longDistanceLabel) return LABEL_10KM
+                if (race.shortDistanceLabel != null && name == race.shortDistanceLabel) return LABEL_5KM
+            } else {
+                if (Regex("^10\\b").containsMatchIn(lower)) return LABEL_10KM
+                if (Regex("^5\\b").containsMatchIn(lower)) return LABEL_5KM
+            }
+            val meters = result.lengthMeters ?: return null
+            return if (meters < 7200) LABEL_5KM else LABEL_10KM
+        }
+
+        /**
+         * Fiche coureur https://mychrono.softalux.com/api/public/runners/{id} :
+         * { "runner": {...}, "competitions": [ { "competition": {...}, "results": [...] } ] }.
+         */
+        fun parseRunnerPayload(jsonText: String): MyChronoRunnerPage? {
+            val root = runCatching { JSONObject(jsonText.trim()) }.getOrNull() ?: return null
+            val runner = root.optJSONObject("runner") ?: return null
+            val id = runner.opt("id")?.toString()?.trim().orEmpty()
+            if (id.isBlank() || id == "null") return null
+            val results = mutableListOf<MyChronoRunnerResult>()
+            val competitions = root.optJSONArray("competitions") ?: JSONArray()
+            for (c in 0 until competitions.length()) {
+                val list = competitions.optJSONObject(c)?.optJSONArray("results") ?: continue
+                for (i in 0 until list.length()) {
+                    val r = list.optJSONObject(i) ?: continue
+                    val status = r.optString("status").lowercase(Locale.ROOT)
+                    if (status.isNotBlank() && status != "finished") continue
+                    val raceId = r.opt("raceId")?.toString()?.trim().orEmpty()
+                    val rank = r.optInt("rank", 0)
+                    val time = parseTimeValue(r.opt("time"))
+                    if (raceId.isBlank() || raceId == "null" || rank <= 0 || time <= 0) continue
+                    results += MyChronoRunnerResult(
+                        raceEventId = raceId,
+                        dateIso = r.optString("date").trim(),
+                        distanceName = r.optString("distance").trim(),
+                        lengthMeters = r.optInt("len", 0).takeIf { it > 0 },
+                        timeSeconds = time,
+                        rank = rank,
+                        categoryRank = r.optInt("catRank", 0),
+                        category = r.optString("cat").trim(),
+                        points = r.optInt("points", 0).takeIf { it > 0 } ?: reglementPointsForRank(rank),
+                        finishers = r.optInt("finishers", 0)
+                    )
+                }
+            }
+            return MyChronoRunnerPage(
+                runnerId = id,
+                name = runner.optString("name").trim(),
+                club = runner.optString("club").trim().takeIf { it != "null" }.orEmpty(),
+                sex = runner.optString("sex").trim().takeIf { it != "null" }.orEmpty(),
+                results = results
+            )
+        }
+
+        /** MyChrono encode le temps en entier : secondes × 1000 + rang ; un texte "mm:ss" est aussi accepté. */
+        internal fun parseTimeValue(raw: Any?): Int = when (raw) {
+            is Number -> raw.toLong().let { v ->
+                when {
+                    v > 100_000L -> (v / 1000L).toInt()
+                    v > 0L -> v.toInt()
+                    else -> 0
+                }
+            }
+            is String -> {
+                val parts = raw.trim()
+                    .replace("'", ":").replace("h", ":").replace("m", ":").replace("s", "")
+                    .split(":").mapNotNull { it.trim().toIntOrNull() }
+                when (parts.size) {
+                    2 -> parts[0] * 60 + parts[1]
+                    3 -> parts[0] * 3600 + parts[1] * 60 + parts[2]
+                    else -> 0
+                }
+            }
+            else -> 0
+        }
     }
 
     private fun getJson(url: String): String? =
@@ -101,7 +227,21 @@ class MyChronoApiClient(
             runCatching {
                 val body = getJson("$MYCHRONO_PUBLIC_API/races/$myChronoEventId/results")
                     ?: throw IllegalStateException("Résultats MyChrono injoignables")
+                // Réponse illisible (coupée, page d'erreur…) : échec, pour réessayer à la prochaine synchro
+                // au lieu de garder un classement vide.
+                val readable = runCatching { JSONObject(body.trim()).has("results") }.getOrDefault(false)
+                if (!readable) throw IllegalStateException("Résultats MyChrono illisibles")
                 parseResultsPayload(body, isChallenge)
+            }
+        }
+
+    /** Fiche coureur MyChrono (toutes ses courses publiées). */
+    suspend fun fetchRunnerPage(runnerId: String): Result<MyChronoRunnerPage> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val body = getJson("$MYCHRONO_PUBLIC_API/runners/${runnerId.trim()}")
+                    ?: throw IllegalStateException("Fiche MyChrono injoignable")
+                parseRunnerPayload(body) ?: throw IllegalStateException("Fiche MyChrono illisible")
             }
         }
 
@@ -200,7 +340,8 @@ class MyChronoApiClient(
                     rows = rawRows.filter { it.distanceLabel == label },
                     runnerId = runnerId,
                     bib = bib,
-                    bibIsExplicitForThisRace = false
+                    bibIsExplicitForThisRace = false,
+                    profileName = profile.displayName
                 )
             }
         return (byId + byBib).map { entity(it) }
@@ -210,7 +351,8 @@ class MyChronoApiClient(
         rows: List<MyChronoRawResultRow>,
         runnerId: String,
         bib: String,
-        bibIsExplicitForThisRace: Boolean
+        bibIsExplicitForThisRace: Boolean,
+        profileName: String = ""
     ): MyChronoRawResultRow? {
         if (rows.isEmpty()) return null
         val cleanRunnerId = runnerId.trim()
@@ -220,9 +362,12 @@ class MyChronoApiClient(
         val cleanBib = normalizeBib(bib)
         if (cleanBib.isBlank()) return null
         val bibRow = rows.firstOrNull { normalizeBib(it.bibNumber) == cleanBib } ?: return null
+        // Dossard porté sous un autre identifiant : refusé, sauf si c'est le même nom (MyChrono a fusionné
+        // deux fiches du coureur après coup, et le classement gardé sur le téléphone a l'ancien identifiant).
         val belongsToSomeoneElse = cleanRunnerId.isNotBlank() &&
             bibRow.runnerId.isNotBlank() &&
-            bibRow.runnerId != cleanRunnerId
+            bibRow.runnerId != cleanRunnerId &&
+            !namesMatch(profileName, bibRow.fullName)
         return if (belongsToSomeoneElse && !bibIsExplicitForThisRace) null else bibRow
     }
 
@@ -487,35 +632,10 @@ class MyChronoApiClient(
      * MyChrono encode le temps en entier : secondes × 1000 + rang (ex. 3254075 = 54:14 pour le 75e).
      * On garde les secondes. Un temps texte "mm:ss" ou "h:mm:ss" est aussi accepté.
      */
-    private fun parseTimeSeconds(row: JSONObject): Int {
-        val raw = row.opt("time")
-        return when (raw) {
-            is Number -> {
-                val v = raw.toLong()
-                when {
-                    v > 100_000L -> (v / 1000L).toInt()
-                    v > 0L -> v.toInt()
-                    else -> 0
-                }
-            }
-            is String -> parseFormattedTimeToSeconds(raw)
-            else -> 0
-        }
-    }
+    private fun parseTimeSeconds(row: JSONObject): Int = parseTimeValue(row.opt("time"))
 
     private fun normalizeBib(bib: String): String =
         bib.trim().removePrefix("#").trimStart('0')
-
-    private fun parseFormattedTimeToSeconds(formatted: String): Int {
-        val parts = formatted.trim()
-            .replace("'", ":").replace("h", ":").replace("m", ":").replace("s", "")
-            .split(":").mapNotNull { it.trim().toIntOrNull() }
-        return when (parts.size) {
-            2 -> parts[0] * 60 + parts[1]
-            3 -> parts[0] * 3600 + parts[1] * 60 + parts[2]
-            else -> 0
-        }
-    }
 
     private fun formatSecondsToMmSs(totalSeconds: Int): String {
         val hours = totalSeconds / 3600

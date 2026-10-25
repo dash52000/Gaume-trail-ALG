@@ -79,14 +79,31 @@ class SyncEndToEndTest {
                                     "time":1866084,"status":"finished","points":1117,"runnerId":1202}]}]}
     """.trimIndent()
 
+    /** Fiche coureur de Damien (vraies valeurs de Sommethonne). */
+    private val runnerPage1171 = """
+        {"runner":{"id":1171,"name":"COLLET Damien","club":"","city":"","sex":"M"},
+         "competitions":[{"competition":{"id":3,"name":"Challenge ALG 2026","year":2026,"kind":"challenge"},
+           "results":[
+             {"raceId":5,"num":5,"date":"2026-02-22","place":"Sommethonne","raceName":"A.L.de la Thonne","distanceId":5,
+              "distance":"5 km","len":5900,"lenReal":true,"status":"finished","time":1821049,"rank":49,"catRank":16,
+              "cat":"S","points":1152,"pace":309,"speed":11.66,"finishers":206},
+             {"raceId":41,"num":41,"date":"2026-10-18","place":"Virton","distanceId":4,"distance":"10 km","len":10400,
+              "status":"finished","time":3254075,"rank":75,"catRank":27,"cat":"S","points":1126,"finishers":160}],
+           "byDist":[]}]}
+    """.trimIndent()
+
+    var results5Body = results5
+    var serveRunnerPage = true
+
     private val http = OkHttpClient.Builder().addInterceptor { chain ->
         val url = chain.request().url.toString()
         if (url.contains("mychrono")) calls++
         val body = when {
             url.contains("races?year=2026") -> calendar2026
             url.contains("races?year=") -> """{"races":[]}"""
-            url.endsWith("/races/5/results") -> results5
+            url.endsWith("/races/5/results") -> results5Body
             url.endsWith("/races/41/results") -> results41
+            url.endsWith("/runners/1171") && serveRunnerPage -> runnerPage1171
             else -> null
         }
         Response.Builder()
@@ -141,6 +158,74 @@ class SyncEndToEndTest {
         // Deuxième synchro : les manches closes depuis plus de 3 semaines ne sont pas retéléchargées.
         calls = 0
         repository().syncAll()
-        assertEquals(3 + 1, calls) // 3 calendriers (2025, 2026, 2027) + Virton, close depuis moins de 3 semaines
+        // 3 calendriers (2025, 2026, 2027) + Virton, close depuis moins de 3 semaines + 3 fiches coureur
+        assertEquals(3 + 1 + 3, calls)
+    }
+
+    /**
+     * Cas réel : le classement de Sommethonne gardé sur le téléphone a le 5 km de Damien sous un ancien
+     * identifiant (fiches fusionnées depuis chez MyChrono) et la course, close depuis des mois, n'est plus
+     * retéléchargée. Sans dossard 5 km saisi, rien ne le retrouvait. La fiche coureur le signale.
+     */
+    @Test
+    fun staleRaceRowsAreRefetched_whenTheRunnerPageListsTheRace() = runBlocking {
+        val dao = db.algDao()
+        dao.upsertRunnerProfiles(GaumeInitialSeedData.buildInitialProfiles())
+        dao.upsertSeasonBib(SeasonBibEntity("me", 2026, "697", ""))
+
+        // Version précédente : classement gardé avec l'ancien identifiant, fiche coureur pas lue.
+        results5Body = results5.replace("\"runnerId\":1171", "\"runnerId\":8888")
+        serveRunnerPage = false
+        repository().syncAll()
+        assertTrue(dao.getAllResultsSnapshot().none { it.profileId == "me" && it.raceId == "alg_2026_r05" })
+
+        // MyChrono publie maintenant le résultat sous 1171, et la fiche coureur est lue.
+        results5Body = results5
+        serveRunnerPage = true
+        val repo = repository()
+        val message = repo.syncAll().getOrThrow()
+        assertTrue(message, message.contains("fiche MyChrono"))
+        assertTrue(message, !message.contains("repris directement"))
+
+        val sommethonne = dao.getAllResultsSnapshot().single { it.profileId == "me" && it.raceId == "alg_2026_r05" }
+        assertEquals("5 km", sommethonne.distanceLabel)
+        assertEquals(1152, sommethonne.challengePoints)
+        assertTrue(dao.getAllStandingsSnapshot().any { it.distanceLabel == "5 km" && it.myChronoRunnerId == "1171" })
+        val report = repo.diagnosticsFlow.value.profiles.single { it.profileId == "me" }
+        assertEquals(1, report.onRunnerPageBySeason?.get(2026)?.get("5 km"))
+    }
+
+    /** Classement publié sans la ligne de Damien, alors que sa fiche a la course : résultat repris de la fiche. */
+    @Test
+    fun resultMissingFromRaceResults_isTakenFromTheRunnerPage() = runBlocking {
+        val dao = db.algDao()
+        dao.upsertRunnerProfiles(GaumeInitialSeedData.buildInitialProfiles())
+        dao.upsertSeasonBib(SeasonBibEntity("me", 2026, "697", "1150"))
+        results5Body = """
+            {"race":{"id":5,"distances":[{"id":4,"label":"10 km","kind":"adult","effective":10900},
+                                         {"id":5,"label":"5 km","kind":"adult","effective":5900}]},
+             "results":[
+               {"distanceId":4,"rows":[{"rank":1,"bib":700,"name":"AUTRE Coureur","cat":"S","time":2400001,"status":"finished","points":1200,"runnerId":9}]},
+               {"distanceId":5,"rows":[{"rank":1,"bib":1001,"name":"RAPIDE Anne","sex":"F","cat":"F","time":1500001,"status":"finished","points":1200,"runnerId":10}]}]}
+        """.trimIndent()
+
+        val message = repository().syncAll().getOrThrow()
+        assertTrue(message, message.contains("1 repris directement de la fiche"))
+
+        val sommethonne = dao.getAllResultsSnapshot().single { it.profileId == "me" && it.raceId == "alg_2026_r05" }
+        assertEquals("5 km", sommethonne.distanceLabel)
+        assertEquals("1150", sommethonne.bibNumber)
+        assertEquals(1152, sommethonne.challengePoints)
+        assertEquals("30:21", sommethonne.officialTimeFormatted)
+        assertEquals(49, sommethonne.overallRank)
+        assertEquals(206, sommethonne.totalFinishers)
+        assertEquals(16, sommethonne.categoryRank)
+        val standing = dao.getAllStandingsSnapshot().single { it.distanceLabel == "5 km" && it.myChronoRunnerId == "1171" }
+        assertEquals(1152, standing.totalPoints)
+
+        // Synchro suivante : la ligne reprise de la fiche suffit, Sommethonne n'est pas retéléchargée.
+        calls = 0
+        repository().syncAll()
+        assertEquals(3 + 1 + 3, calls)
     }
 }

@@ -21,6 +21,7 @@ import com.example.data.local.RunnerProfileEntity
 import com.example.data.local.SeasonBibEntity
 import com.example.data.remote.MyChronoApiClient
 import com.example.data.remote.MyChronoRawResultRow
+import com.example.data.remote.MyChronoRunnerResult
 import com.example.data.remote.OpenMeteoClient
 import com.example.data.remote.WikipediaClient
 import com.example.data.local.SeasonGoalEntity
@@ -37,6 +38,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.time.LocalDate
+import kotlin.math.roundToInt
 
 /** Ce que MyChrono publie sous l'identifiant d'un profil, pour vérifier qu'il est le bon. */
 data class ProfileIdentityReport(
@@ -44,7 +46,9 @@ data class ProfileIdentityReport(
     val runnerId: String,
     val myChronoName: String?,
     /** Saison → distance ("10 km" / "5 km") → nombre de manches publiées sous cet identifiant. */
-    val publishedBySeason: Map<Int, Map<String, Int>>
+    val publishedBySeason: Map<Int, Map<String, Int>>,
+    /** Saison → distance → nombre de courses sur la fiche coureur MyChrono (null : fiche pas encore lue). */
+    val onRunnerPageBySeason: Map<Int, Map<String, Int>>? = null
 )
 
 data class SyncDiagnostics(
@@ -75,9 +79,19 @@ class AlgRepository(
 
         /** Nombre maximal de courses dont la météo est cherchée à chaque synchro. */
         private const val MAX_WEATHER_PER_SYNC = 40
+
+        /**
+         * Ligne ajoutée au classement d'une course à partir de la fiche coureur (rowIndex = base + identifiant) :
+         * hors de la plage des lignes téléchargées, et une seule par coureur et par distance.
+         */
+        const val RUNNER_PAGE_ROW_INDEX = 1_000_000
     }
 
     private val recomputeMutex = Mutex()
+
+    /** Identifiant MyChrono → saison → distance → nombre de courses sur sa fiche (dernière lecture). */
+    @Volatile
+    private var runnerPageCounts: Map<String, Map<Int, Map<String, Int>>> = emptyMap()
 
     private val diagnosticsState = MutableStateFlow(SyncDiagnostics())
     val diagnosticsFlow: StateFlow<SyncDiagnostics> = diagnosticsState.asStateFlow()
@@ -260,7 +274,7 @@ class AlgRepository(
         val raceById = allRaces.associateBy { it.raceId }
         fetched.forEach { (raceId, rows) -> raceById[raceId]?.let { storeRows(it, rows) } }
 
-        val repairs = repairRunnerIds()
+        val repairs = repairRunnerIds() + runCatching { crossCheckWithRunnerPages() }.getOrDefault(emptyList())
         recomputeAllSeasons()
         refreshDiagnostics(repairs)
         val weatherCount = runCatching { fetchMissingWeather(now) }.getOrDefault(0)
@@ -414,6 +428,106 @@ class AlgRepository(
         messages
     }
 
+    /**
+     * Contre-vérification avec la fiche coureur MyChrono de chaque profil (1 appel par profil) : chaque course
+     * de la fiche doit se trouver dans le classement gardé sur le téléphone, sous son identifiant et sur la
+     * bonne distance. Sinon (classement gardé avant une correction ou une fusion de fiches chez MyChrono,
+     * téléchargement raté…), la course est retéléchargée ; s'il y manque encore, son résultat est repris de
+     * la fiche et ajouté au classement de la course.
+     */
+    private suspend fun crossCheckWithRunnerPages(): List<String> {
+        val profiles = algDao.getRunnerProfilesSnapshot().filter { it.myChronoRunnerId.isNotBlank() }
+        if (profiles.isEmpty()) return emptyList()
+        val profileByRunner = profiles.associateBy { it.myChronoRunnerId.trim() }
+        val pages = profileByRunner.keys.mapNotNull { id ->
+            myChronoApiClient.fetchRunnerPage(id).getOrNull()?.let { id to it }
+        }.toMap()
+        if (pages.isEmpty()) return emptyList()
+
+        val racesByEventId = algDao.getAllRacesSnapshot()
+            .filter { it.seasonYear >= FIRST_SEASON }
+            .groupBy { it.myChronoEventId }
+
+        data class Expected(val runnerId: String, val race: RaceEntity, val label: String, val result: MyChronoRunnerResult)
+
+        val expected = pages.flatMap { (id, page) ->
+            page.results.mapNotNull { r ->
+                val race = racesByEventId[r.raceEventId]
+                    ?.firstOrNull { r.dateIso.isBlank() || it.dateIso == r.dateIso }
+                    ?: return@mapNotNull null
+                val label = MyChronoApiClient.labelForRunnerResult(race, r) ?: return@mapNotNull null
+                Expected(id, race, label, r)
+            }
+        }.distinctBy { Triple(it.runnerId, it.race.raceId, it.label) }
+
+        val pageCounts = expected.groupBy { it.runnerId }.mapValues { (_, list) ->
+            list.groupBy { it.race.seasonYear }.mapValues { (_, l) -> l.groupingBy { it.label }.eachCount() }
+        }
+        runnerPageCounts = runnerPageCounts + pages.keys.associateWith { pageCounts[it].orEmpty() }
+
+        val rowsCache = HashMap<String, List<MyChronoRowEntity>>()
+        suspend fun rowsOf(raceId: String) = rowsCache.getOrPut(raceId) { algDao.getRowsForRace(raceId) }
+        suspend fun isCached(e: Expected) =
+            rowsOf(e.race.raceId).any { it.distanceLabel == e.label && it.runnerId == e.runnerId }
+
+        val missing = expected.filter { !isCached(it) }
+        if (missing.isEmpty()) return emptyList()
+
+        val toRefetch = missing.map { it.race }.distinctBy { it.raceId }
+        myChronoApiClient.fetchManyRaceResults(toRefetch).forEach { (raceId, rows) ->
+            toRefetch.firstOrNull { it.raceId == raceId }?.let { storeRows(it, rows) }
+            rowsCache.remove(raceId)
+        }
+
+        val stillMissing = missing.filter { !isCached(it) }
+        if (stillMissing.isNotEmpty()) {
+            val bibs = algDao.getSeasonBibsSnapshot()
+            val patches = stillMissing.map { e ->
+                val page = pages.getValue(e.runnerId)
+                val others = rowsOf(e.race.raceId).filter { it.distanceLabel == e.label }
+                val is5 = e.label == MyChronoApiClient.LABEL_5KM
+                val sb = bibs.firstOrNull {
+                    it.profileId == profileByRunner[e.runnerId]?.profileId && it.seasonYear == e.race.seasonYear
+                }
+                MyChronoRowEntity(
+                    raceId = e.race.raceId,
+                    distanceLabel = e.label,
+                    rowIndex = RUNNER_PAGE_ROW_INDEX + (e.runnerId.toIntOrNull() ?: (e.runnerId.hashCode() and 0xFFFFF)),
+                    seasonYear = e.race.seasonYear,
+                    isChallenge = e.race.isChallenge,
+                    distanceName = e.result.distanceName.ifBlank { e.label },
+                    distanceKm = e.result.lengthMeters?.let { (it / 100.0).roundToInt() / 10.0 }
+                        ?: e.race.realDistanceKmFor(if (is5) 5 else 10)
+                        ?: if (is5) 5.0 else 10.0,
+                    runnerId = e.runnerId,
+                    bibNumber = (if (is5) sb?.bib5km else sb?.bib10km).orEmpty(),
+                    fullName = page.name,
+                    club = page.club,
+                    category = e.result.category,
+                    sex = page.sex,
+                    timeSeconds = e.result.timeSeconds,
+                    overallRank = e.result.rank,
+                    totalFinishers = e.result.finishers.takeIf { it > 0 } ?: (others.size + 1),
+                    categoryRank = e.result.categoryRank,
+                    // Effectif de la catégorie inconnu si le classement de la course n'est pas sur le téléphone.
+                    categoryTotal = if (others.isEmpty()) 0 else others.count { it.category == e.result.category } + 1,
+                    points = e.result.points
+                )
+            }
+            inTransaction { algDao.insertRows(patches) }
+        }
+
+        return missing.groupBy { it.runnerId }.map { (id, list) ->
+            val who = profileByRunner[id]?.displayName?.substringBefore(" ") ?: id
+            val detail = list.groupingBy { it.label }.eachCount().entries
+                .sortedBy { if (it.key == MyChronoApiClient.LABEL_10KM) 0 else 1 }
+                .joinToString(" + ") { "${it.value} × ${it.key}" }
+            val fromPage = stillMissing.count { it.runnerId == id }
+            "$who : $detail manquant(s) dans les classements, retrouvé(s) via la fiche MyChrono" +
+                if (fromPage > 0) " ($fromPage repris directement de la fiche)" else ""
+        }
+    }
+
     /** Met à jour le diagnostic affiché dans les réglages. */
     suspend fun refreshDiagnostics(repairs: List<String> = diagnosticsState.value.repairs) = withContext(Dispatchers.IO) {
         val profiles = algDao.getRunnerProfilesSnapshot()
@@ -428,7 +542,8 @@ class AlgRepository(
                     runnerId = p.myChronoRunnerId.trim(),
                     myChronoName = mine.maxByOrNull { it.n }?.fullName,
                     publishedBySeason = mine.groupBy { it.seasonYear }
-                        .mapValues { (_, l) -> l.associate { it.distanceLabel to it.n } }
+                        .mapValues { (_, l) -> l.associate { it.distanceLabel to it.n } },
+                    onRunnerPageBySeason = runnerPageCounts[p.myChronoRunnerId.trim()]
                 )
             },
             cachedRacesBySeason = algDao.cachedRaceCountBySeason().associate { it.seasonYear to it.n },

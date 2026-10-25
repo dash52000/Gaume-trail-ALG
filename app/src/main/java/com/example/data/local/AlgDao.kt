@@ -128,6 +128,9 @@ interface AlgDao {
     @Query("SELECT * FROM challenge_standings WHERE seasonYear >= 2025")
     fun observeAllStandings(): Flow<List<ChallengeStandingEntity>>
 
+    @Query("SELECT * FROM challenge_standings WHERE seasonYear >= 2025")
+    suspend fun getAllStandingsSnapshot(): List<ChallengeStandingEntity>
+
     @Query("DELETE FROM challenge_standings WHERE seasonYear = :seasonYear")
     suspend fun deleteStandingsBySeason(seasonYear: Int)
 

@@ -266,6 +266,66 @@ class MyChronoRealDataTest {
         assertTrue(client.parseResultsPayload(invented).isEmpty())
     }
 
+    /** Extrait réel de https://mychrono.softalux.com/api/public/runners/1171 (saison 2026). */
+    private val runnerPageJson = """
+        {"runner":{"id":1171,"name":"COLLET Damien","club":"","city":"","sex":"M"},
+         "competitions":[
+           {"competition":{"id":3,"orgId":1,"name":"Challenge ALG 2026","year":2026,"kind":"challenge"},
+            "results":[
+              {"raceId":5,"num":5,"date":"2026-02-22","place":"Sommethonne","raceName":"A.L.de la Thonne","distanceId":5,
+               "distance":"5 km","len":5900,"lenReal":true,"status":"finished","time":1821049,"rank":49,"catRank":16,
+               "cat":"S","points":1152,"pace":309,"speed":11.66,"finishers":206},
+              {"raceId":15,"num":15,"date":"2026-05-01","place":"Beckerich","distanceId":5,"distance":"5 km","len":5600,
+               "status":"finished","time":1588033,"rank":33,"catRank":18,"cat":"S","points":1168,"finishers":239},
+              {"raceId":27,"num":27,"date":"2026-07-12","place":"Houdemont","distanceId":5,"distance":"5 km","len":5900,
+               "status":"finished","time":2403087,"rank":87,"catRank":23,"cat":"S","points":1114,"finishers":146},
+              {"raceId":28,"num":28,"date":"2026-07-19","place":"Ailleurs","distanceId":4,"distance":"10 km","len":10000,
+               "status":"dns","time":0,"rank":0,"points":0}],
+            "byDist":[]}]}
+    """.trimIndent()
+
+    @Test
+    fun runnerPage_listsEveryRaceWithItsDistance() {
+        val page = MyChronoApiClient.parseRunnerPayload(runnerPageJson)!!
+        assertEquals("1171", page.runnerId)
+        assertEquals("COLLET Damien", page.name)
+        assertEquals(3, page.results.size) // le non-partant est ignoré
+
+        val sommethonne = page.results.first { it.raceEventId == "5" }
+        assertEquals(1821, sommethonne.timeSeconds) // 30:21
+        assertEquals(49, sommethonne.rank)
+        assertEquals(16, sommethonne.categoryRank)
+        assertEquals(1152, sommethonne.points)
+        assertEquals(206, sommethonne.finishers)
+
+        val races = client.parseRacesPayload(racesJson, 2026)
+        val manche = races.first { it.roundNumber == 1 }
+        assertEquals("5 km", MyChronoApiClient.labelForRunnerResult(manche, sommethonne))
+        // Beckerich : la grande distance s'appelle « 10 km » mais fait 21,2 km — même règle que le classement.
+        val semi = sommethonne.copy(distanceName = "10 km", lengthMeters = 21200)
+        assertEquals("10 km", MyChronoApiClient.labelForRunnerResult(manche, semi))
+        assertNull(MyChronoApiClient.labelForRunnerResult(manche, sommethonne.copy(distanceName = "Jeunes", lengthMeters = 1000)))
+
+        // Hors challenge : distances propres à la course (14 km → place du 10 km, 7 km → place du 5 km).
+        val hc = races.single { !it.isChallenge }
+        assertEquals("10 km", MyChronoApiClient.labelForRunnerResult(hc, sommethonne.copy(distanceName = "14 km", lengthMeters = 14000)))
+        assertEquals("5 km", MyChronoApiClient.labelForRunnerResult(hc, sommethonne.copy(distanceName = "7 km", lengthMeters = 7000)))
+    }
+
+    @Test
+    fun matching_acceptsTheSameNameUnderAnOldId() {
+        // Classement gardé sur le téléphone avant que MyChrono fusionne deux fiches de Damien.
+        val rows = client.parseResultsPayload(race41ResultsJson)
+            .map { if (it.runnerId == "1171") it.copy(runnerId = "8888", distanceLabel = "5 km", bibNumber = "1150") else it }
+        val withBib = damien.copy(defaultBib5km = "1150")
+        assertEquals("5 km", client.findMatchingResultsForProfile("alg_2026_r05", 2026, withBib, null, rows).single().distanceLabel)
+
+        assertTrue(MyChronoApiClient.namesMatch("Damien Collet", "COLLET Damien"))
+        assertTrue(MyChronoApiClient.namesMatch("Élodie", "ELODIE"))
+        assertFalse(MyChronoApiClient.namesMatch("Damien Collet", "COLLET Sébastien"))
+        assertFalse(MyChronoApiClient.namesMatch("", "COLLET Damien"))
+    }
+
     @Test
     fun reglementPoints_followAlgRule() {
         assertEquals(1200, MyChronoApiClient.reglementPointsForRank(1))

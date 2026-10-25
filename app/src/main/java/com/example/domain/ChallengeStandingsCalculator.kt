@@ -107,10 +107,11 @@ object ChallengeStandingsCalculator {
         if (inDistance.isEmpty()) return null
 
         val runnerId = profile.myChronoRunnerId.trim()
+        val sameBib = { s: ChallengeStandingEntity -> s.bibNumber.trimStart('0') == bib.trimStart('0') }
         val mine = (if (runnerId.isNotBlank()) inDistance.firstOrNull { it.myChronoRunnerId == runnerId } else null)
-            ?: inDistance.firstOrNull {
-                (runnerId.isBlank() || it.myChronoRunnerId.isBlank()) && it.bibNumber.trimStart('0') == bib.trimStart('0')
-            }
+            ?: inDistance.firstOrNull { (runnerId.isBlank() || it.myChronoRunnerId.isBlank()) && sameBib(it) }
+            // Même dossard et même nom sous un ancien identifiant (fiches fusionnées par MyChrono).
+            ?: inDistance.firstOrNull { sameBib(it) && MyChronoApiClient.namesMatch(profile.displayName, it.fullName) }
             ?: return null
 
         return ProfileChallengeStanding(

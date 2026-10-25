@@ -837,7 +837,7 @@ private fun OfficialMyChronoResultCard(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Text(
-                            text = "${result.categoryRank}e / ${result.categoryTotal}",
+                            text = "${result.categoryRank}e" + if (result.categoryTotal > 0) " / ${result.categoryTotal}" else "",
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.ExtraBold
                         )
