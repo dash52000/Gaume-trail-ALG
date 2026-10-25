@@ -3,7 +3,9 @@ package com.example.data.repository
 import android.content.Context
 import android.net.Uri
 import com.example.data.local.ActivityMetricsEntity
+import androidx.room.withTransaction
 import com.example.data.local.AlgDao
+import com.example.data.local.AlgDatabase
 import com.example.data.local.ChallengeStandingEntity
 import com.example.data.local.CourseFactorEntity
 import com.example.data.local.GaumeInitialSeedData
@@ -34,7 +36,9 @@ class AlgRepository(
     private val algDao: AlgDao,
     private val myChronoApiClient: MyChronoApiClient = MyChronoApiClient(),
     private val openMeteoClient: OpenMeteoClient = OpenMeteoClient(),
-    private val today: () -> LocalDate = { LocalDate.now() }
+    private val today: () -> LocalDate = { LocalDate.now() },
+    /** Pour regrouper les écritures (l'écran ne voit jamais une saison à moitié recalculée). */
+    private val database: AlgDatabase? = null
 ) {
     companion object {
         /** Première saison publiée par MyChrono pour le Challenge des Allures Libres de Gaume. */
@@ -48,6 +52,11 @@ class AlgRepository(
     }
 
     private val recomputeMutex = Mutex()
+
+    private suspend fun <T> inTransaction(block: suspend () -> T): T {
+        val db = database ?: return block()
+        return db.withTransaction { block() }
+    }
 
     val runnerProfilesFlow: Flow<List<RunnerProfileEntity>> = algDao.observeRunnerProfiles()
     val allRacesFlow: Flow<List<RaceEntity>> = algDao.observeAllRaces()
@@ -116,11 +125,13 @@ class AlgRepository(
 
     private fun needsFetch(race: RaceEntity, state: RaceFetchStateEntity?, now: LocalDate, force: Boolean): Boolean {
         if (!hasPublishedResults(race, now)) return false
-        if (force || state == null || state.rowCount == 0 || state.raceDateIso != race.dateIso) return true
+        if (force || state == null || state.raceDateIso != race.dateIso) return true
+        // Classement publié vide : on réessaie pendant deux mois, pas indéfiniment.
+        if (state.rowCount == 0) return race.dateIso >= now.minusDays(60).toString()
         return race.dateIso >= now.minusDays(REFRESH_WINDOW_DAYS).toString()
     }
 
-    private suspend fun storeRows(race: RaceEntity, rows: List<MyChronoRawResultRow>) {
+    private suspend fun storeRows(race: RaceEntity, rows: List<MyChronoRawResultRow>) = inTransaction {
         algDao.deleteRowsForRace(race.raceId)
         algDao.insertRows(rows.mapIndexed { idx, r ->
             MyChronoRowEntity(
@@ -175,8 +186,10 @@ class AlgRepository(
         calendars.forEach { (year, res) ->
             val races = res.getOrNull().orEmpty()
             if (races.isNotEmpty()) {
-                algDao.deleteRacesBySeason(year)
-                algDao.upsertRaces(races)
+                inTransaction {
+                    algDao.deleteRacesBySeason(year)
+                    algDao.upsertRaces(races)
+                }
             }
         }
 
@@ -266,27 +279,28 @@ class AlgRepository(
                     )
                 }
             }
-            algDao.deleteResultsBySeason(seasonYear)
-            if (results.isNotEmpty()) algDao.upsertRaceResults(results.distinctBy { Triple(it.raceId, it.profileId, it.distanceLabel) })
-
             val stamp = System.currentTimeMillis()
-            algDao.deleteStandingsBySeason(seasonYear)
-            algDao.upsertStandings(
-                ChallengeStandingsCalculator.computeSeasonStandings(
-                    seasonYear = seasonYear,
-                    rawRowsByRaceId = rowsByRace.filterKeys { it in challengeIds },
-                    computedAtEpochMillis = stamp
-                )
+            val standings = ChallengeStandingsCalculator.computeSeasonStandings(
+                seasonYear = seasonYear,
+                rawRowsByRaceId = rowsByRace.filterKeys { it in challengeIds },
+                computedAtEpochMillis = stamp
             )
+            val factors = CourseDifficultyCalculator.computeSeasonFactors(rowsByRace, challengeIds).map {
+                CourseFactorEntity(it.raceId, it.distanceLabel, seasonYear, it.factor, it.regularsCount)
+            }
+            val directory = myChronoApiClient.buildDirectoryFromRows(rowsByRace.values.flatten())
 
-            algDao.deleteCourseFactorsBySeason(seasonYear)
-            algDao.upsertCourseFactors(
-                CourseDifficultyCalculator.computeSeasonFactors(rowsByRace, challengeIds).map {
-                    CourseFactorEntity(it.raceId, it.distanceLabel, seasonYear, it.factor, it.regularsCount)
+            inTransaction {
+                algDao.deleteResultsBySeason(seasonYear)
+                if (results.isNotEmpty()) {
+                    algDao.upsertRaceResults(results.distinctBy { Triple(it.raceId, it.profileId, it.distanceLabel) })
                 }
-            )
-
-            algDao.upsertDirectoryEntries(myChronoApiClient.buildDirectoryFromRows(rowsByRace.values.flatten()))
+                algDao.deleteStandingsBySeason(seasonYear)
+                algDao.upsertStandings(standings)
+                algDao.deleteCourseFactorsBySeason(seasonYear)
+                algDao.upsertCourseFactors(factors)
+                algDao.upsertDirectoryEntries(directory)
+            }
         }
     }
 

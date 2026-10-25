@@ -72,7 +72,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
 
         val database = AlgDatabase.getInstance(applicationContext)
-        val repository = AlgRepository(database.algDao())
+        val repository = AlgRepository(database.algDao(), database = database)
         algViewModel = ViewModelProvider(
             this,
             AlgViewModel.Factory(repository)
