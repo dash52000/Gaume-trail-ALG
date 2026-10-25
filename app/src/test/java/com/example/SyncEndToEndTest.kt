@@ -26,6 +26,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.time.LocalDate
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Synchro complète contre une API MyChrono simulée, avec les vraies valeurs de Sommethonne (manche 5,
@@ -93,6 +94,9 @@ class SyncEndToEndTest {
            "byDist":[]}]}
     """.trimIndent()
 
+    /** Horloge des tests : avance d'une milliseconde à chaque lecture. */
+    private val tick = AtomicLong(1_790_000_000_000L)
+
     var results5Body = results5
     var serveRunnerPage = true
 
@@ -131,7 +135,8 @@ class SyncEndToEndTest {
         openMeteoClient = OpenMeteoClient(http),
         today = { LocalDate.of(2026, 10, 25) },
         database = db,
-        syncPrefs = prefs
+        syncPrefs = prefs,
+        clock = { tick.incrementAndGet() } // Robolectric fige System.currentTimeMillis()
     )
 
     @Test
@@ -203,7 +208,6 @@ class SyncEndToEndTest {
         val dao = db.algDao()
         dao.upsertRunnerProfiles(GaumeInitialSeedData.buildInitialProfiles())
         repository().syncAll() // ancienne version
-        Thread.sleep(5) // classements gardés strictement avant la mise à jour
 
         val prefs = ApplicationProvider.getApplicationContext<Context>()
             .getSharedPreferences("test_sync_${System.nanoTime()}", Context.MODE_PRIVATE)

@@ -71,7 +71,9 @@ class AlgRepository(
     private val database: AlgDatabase? = null,
     private val wikipediaClient: WikipediaClient = WikipediaClient(),
     /** Mémorise la version des classements gardés sur le téléphone (null : pas de retéléchargement forcé). */
-    private val syncPrefs: SharedPreferences? = null
+    private val syncPrefs: SharedPreferences? = null,
+    /** Horloge (millisecondes), remplaçable dans les tests. */
+    private val clock: () -> Long = { System.currentTimeMillis() }
 ) {
     companion object {
         /** Première saison publiée par MyChrono pour le Challenge des Allures Libres de Gaume. */
@@ -143,7 +145,7 @@ class AlgRepository(
     suspend fun loadVillageInfo(village: String) = withContext(Dispatchers.IO) {
         val key = GaumeInitialSeedData.normalizeKey(village)
         val existing = algDao.getVillageInfo(key)
-        val monthAgo = System.currentTimeMillis() - 30L * 24 * 3600 * 1000
+        val monthAgo = clock() - 30L * 24 * 3600 * 1000
         if (existing != null && (existing.found || existing.fetchedAtEpochMillis > monthAgo)) return@withContext
         wikipediaClient.fetchVillageSummary(village).onSuccess { summary ->
             algDao.upsertVillageInfo(
@@ -153,7 +155,7 @@ class AlgRepository(
                     title = summary?.title,
                     extract = summary?.extract,
                     pageUrl = summary?.pageUrl,
-                    fetchedAtEpochMillis = System.currentTimeMillis()
+                    fetchedAtEpochMillis = clock()
                 )
             )
         }
@@ -250,7 +252,7 @@ class AlgRepository(
                 raceId = race.raceId,
                 seasonYear = race.seasonYear,
                 raceDateIso = race.dateIso,
-                fetchedAtEpochMillis = System.currentTimeMillis(),
+                fetchedAtEpochMillis = clock(),
                 rowCount = rows.size
             )
         )
@@ -293,7 +295,7 @@ class AlgRepository(
         val due = allRaces.filter { needsFetch(it, states[it.raceId], now, force) || outdated(it) }
         // Classements gardés depuis longtemps : quelques-uns sont rafraîchis à chaque synchro (corrections,
         // fiches fusionnées chez MyChrono), les plus anciens d'abord.
-        val staleBefore = System.currentTimeMillis() - STALE_AFTER_DAYS * 24 * 3600 * 1000
+        val staleBefore = clock() - STALE_AFTER_DAYS * 24 * 3600 * 1000
         val stale = allRaces
             .filter { it !in due && hasPublishedResults(it, now) }
             .mapNotNull { r -> states[r.raceId]?.takeIf { it.fetchedAtEpochMillis < staleBefore }?.let { r to it } }
@@ -311,7 +313,7 @@ class AlgRepository(
         refreshDiagnostics(repairs)
         val weatherCount = runCatching { fetchMissingWeather(now) }.getOrDefault(0)
 
-        val stamp = System.currentTimeMillis()
+        val stamp = clock()
         algDao.getRunnerProfilesSnapshot().forEach { algDao.upsertRunnerProfile(it.copy(lastSyncedEpochMillis = stamp)) }
 
         val current = allRaces.filter { it.seasonYear == now.year }
@@ -345,7 +347,7 @@ class AlgRepository(
     private fun cacheFormatSince(): Long {
         val prefs = syncPrefs ?: return 0L
         if (prefs.getInt(PREF_CACHE_FORMAT, 0) < CACHE_FORMAT) {
-            val since = System.currentTimeMillis()
+            val since = clock()
             prefs.edit().putInt(PREF_CACHE_FORMAT, CACHE_FORMAT).putLong(PREF_CACHE_FORMAT_SINCE, since).apply()
             return since
         }
@@ -403,7 +405,7 @@ class AlgRepository(
                     )
                 }
             }
-            val stamp = System.currentTimeMillis()
+            val stamp = clock()
             val standings = ChallengeStandingsCalculator.computeSeasonStandings(
                 seasonYear = seasonYear,
                 rawRowsByRaceId = rowsByRace.filterKeys { it in challengeIds },
