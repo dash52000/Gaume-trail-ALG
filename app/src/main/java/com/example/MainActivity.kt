@@ -161,7 +161,8 @@ fun GaumeTrailAlgAppContent(
                     profileId = uiState.selectedProfileId,
                     uri = uri
                 )
-            }
+            },
+            courseRecord = uiState.records?.byRaceId?.get(selectedRaceItem.race.raceId)
         )
     } else {
         BackHandler(enabled = uiState.selectedTab != AlgBottomTab.OVERVIEW) {
@@ -237,7 +238,7 @@ fun GaumeTrailAlgAppContent(
                 }
             },
             bottomBar = {
-                // BARRE DE NAVIGATION À 5 ONGLETS : [Courses] [Perfs] [Trio & Carte] [Passeport] [Réglages]
+                // BARRE DE NAVIGATION À 5 ONGLETS : [Courses] [Perfs] [Trio & Carte] [Défis] [Réglages]
                 NavigationBar(
                     containerColor = MaterialTheme.colorScheme.surface,
                     tonalElevation = 4.dp
@@ -304,13 +305,13 @@ fun GaumeTrailAlgAppContent(
                         onClick = { viewModel.selectTab(AlgBottomTab.BADGES) },
                         icon = {
                             Icon(
-                                imageVector = Icons.Default.Place,
-                                contentDescription = "Passeport"
+                                imageVector = Icons.Default.EmojiEvents,
+                                contentDescription = "Défis"
                             )
                         },
                         label = {
                             Text(
-                                text = "Passeport",
+                                text = "Défis",
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
@@ -366,6 +367,15 @@ fun GaumeTrailAlgAppContent(
                             passport = uiState.activePassport,
                             activeRecap = uiState.activeRecap,
                             trioRecaps = uiState.trioRecaps,
+                            records = uiState.records,
+                            badges = uiState.badges,
+                            trioChallenges = uiState.trioChallenges,
+                            goalSeason = uiState.goalSeason,
+                            goals = uiState.goals,
+                            villageMapPoints = uiState.villageMapPoints,
+                            villageInfos = uiState.villageInfos,
+                            onSetGoal = { type, target -> viewModel.setSeasonGoal(type, target) },
+                            onRequestVillageInfo = { viewModel.loadVillageInfo(it) },
                             onSelectDistanceKm = { viewModel.selectChallengeDistance(it) },
                             onSelectFilterMode = { viewModel.selectRaceFilterMode(it) },
                             onOpenRaceDetail = { viewModel.openRaceDetail(it) },
@@ -489,7 +499,9 @@ fun GaumeTrailAlgAppContent(
                                 )
                             },
                             onTriggerMyChronoSync = { year -> viewModel.syncMyChronoSeason(year) },
-                            onPurgeAndResyncCleanResults = { viewModel.purgeAndResyncCleanResults() }
+                            onPurgeAndResyncCleanResults = { viewModel.purgeAndResyncCleanResults() },
+                            diagnostics = uiState.diagnostics,
+                            foundResultCounts = uiState.foundResultCounts
                         )
                     }
                 }

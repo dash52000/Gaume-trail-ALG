@@ -57,6 +57,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.data.local.MyChronoDirectoryEntry
 import com.example.data.local.RunnerProfileEntity
+import com.example.data.repository.SyncDiagnostics
+import com.example.ui.components.MyChronoDiagnosticCard
 import com.example.ui.components.EditProfileBibAndDistanceDialog
 import com.example.ui.theme.CountingTop15BadgeGreen
 import com.example.ui.theme.GoldPodium
@@ -90,6 +92,8 @@ fun SettingsAndAssociationScreen(
     ) -> Unit,
     onTriggerMyChronoSync: (Int) -> Unit,
     onPurgeAndResyncCleanResults: () -> Unit = { onTriggerMyChronoSync(selectedSeasonYear) },
+    diagnostics: SyncDiagnostics = SyncDiagnostics(),
+    foundResultCounts: Map<String, Map<Int, Map<String, Int>>> = emptyMap(),
     modifier: Modifier = Modifier
 ) {
     var activeTargetProfileId by remember { mutableStateOf("me") }
@@ -102,6 +106,15 @@ fun SettingsAndAssociationScreen(
         contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        // 0. Diagnostic : ce que MyChrono publie sous chaque identifiant, et ce que l'appli retrouve
+        item {
+            MyChronoDiagnosticCard(
+                profiles = profiles,
+                diagnostics = diagnostics,
+                foundResultCounts = foundResultCounts
+            )
+        }
+
         // 1. En-tête : Attribution des Dossards pour les 2 Challenges (10 km & 5 km)
         item {
             Card(

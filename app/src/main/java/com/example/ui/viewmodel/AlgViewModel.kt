@@ -17,7 +17,16 @@ import com.example.data.local.RaceTerrainWeatherEntity
 import com.example.data.local.RaceWeatherEntity
 import com.example.data.local.RunnerProfileEntity
 import com.example.data.local.SeasonBibEntity
+import com.example.data.local.SeasonGoalEntity
+import com.example.data.local.VillageInfoEntity
+import com.example.domain.ChallengesCalculator
+import com.example.domain.FactBadge
+import com.example.domain.GoalProgress
+import com.example.domain.GoalsCalculator
+import com.example.domain.RecordsSummary
+import com.example.domain.TrioChallenge
 import com.example.data.repository.AlgRepository
+import com.example.data.repository.SyncDiagnostics
 import com.example.domain.AlgChallengeCalculator
 import com.example.domain.ChallengeStandingsCalculator
 import com.example.domain.CourseDifficultyCalculator
@@ -91,7 +100,21 @@ data class AlgUiState(
     /** Bilan du profil actif sur la distance choisie. */
     val activeRecap: SeasonRecap? = null,
     /** profileId → true si les dossards de la saison affichée ont été saisis. */
-    val seasonBibsDeclared: Map<String, Boolean> = emptyMap()
+    val seasonBibsDeclared: Map<String, Boolean> = emptyMap(),
+    /** Ce que MyChrono publie sous l'identifiant de chaque profil, et ce qui est en mémoire. */
+    val diagnostics: SyncDiagnostics = SyncDiagnostics(),
+    /** profileId → saison → distance → nombre de manches retrouvées par l'appli. */
+    val foundResultCounts: Map<String, Map<Int, Map<String, Int>>> = emptyMap(),
+    /** Records de parcours du profil actif sur la distance choisie, vus depuis la saison affichée. */
+    val records: RecordsSummary? = null,
+    val badges: List<FactBadge> = emptyList(),
+    val trioChallenges: List<TrioChallenge> = emptyList(),
+    /** Saison des objectifs : la saison affichée, ou la suivante si elle est terminée. */
+    val goalSeason: Int = LocalDate.now().year,
+    val goals: List<GoalProgress> = emptyList(),
+    /** Clé de village normalisée → fiche Wikipédia. */
+    val villageInfos: Map<String, VillageInfoEntity> = emptyMap(),
+    val villageMapPoints: List<com.example.domain.VillageMapPoint> = emptyList()
 )
 
 private data class ControlState(
@@ -121,7 +144,10 @@ private data class DataFlowsBundle(
     val standings: List<ChallengeStandingEntity> = emptyList(),
     val seasonBibs: List<SeasonBibEntity> = emptyList(),
     val courseFactors: List<CourseFactorEntity> = emptyList(),
-    val raceWeather: List<RaceWeatherEntity> = emptyList()
+    val raceWeather: List<RaceWeatherEntity> = emptyList(),
+    val diagnostics: SyncDiagnostics = SyncDiagnostics(),
+    val seasonGoals: List<SeasonGoalEntity> = emptyList(),
+    val villageInfos: List<VillageInfoEntity> = emptyList()
 )
 
 class AlgViewModel(
@@ -150,11 +176,18 @@ class AlgViewModel(
         combine(
             repository.seasonBibsFlow,
             repository.courseFactorsFlow,
-            repository.raceWeatherFlow
-        ) { bibs, factors, weather ->
-            DataFlowsBundle(seasonBibs = bibs, courseFactors = factors, raceWeather = weather)
+            repository.raceWeatherFlow,
+            repository.diagnosticsFlow
+        ) { bibs, factors, weather, diagnostics ->
+            DataFlowsBundle(seasonBibs = bibs, courseFactors = factors, raceWeather = weather, diagnostics = diagnostics)
+        },
+        combine(
+            repository.seasonGoalsFlow,
+            repository.villageInfoFlow
+        ) { goals, infos ->
+            DataFlowsBundle(seasonGoals = goals, villageInfos = infos)
         }
-    ) { a, b, c ->
+    ) { a, b, c, d ->
         a.copy(
             allMetrics = b.allMetrics,
             allTerrainWeather = b.allTerrainWeather,
@@ -162,7 +195,10 @@ class AlgViewModel(
             standings = b.standings,
             seasonBibs = c.seasonBibs,
             courseFactors = c.courseFactors,
-            raceWeather = c.raceWeather
+            raceWeather = c.raceWeather,
+            diagnostics = c.diagnostics,
+            seasonGoals = d.seasonGoals,
+            villageInfos = d.villageInfos
         )
     }
 
@@ -364,6 +400,52 @@ class AlgViewModel(
             )
         }
 
+        // Gamification fondée sur les faits : records de parcours, badges, défis du Trio, objectifs.
+        val selectedLabel = if (ctrl.selectedChallengeDistanceKm == 5) "5 km" else "10 km"
+        val records = activeProfile?.let {
+            ChallengesCalculator.records(it.profileId, selectedLabel, activeSeasonYear, allRaces, challengeResults)
+        }
+        fun beatenIn(profileId: String, year: Int): Int = listOf("10 km", "5 km").sumOf { l ->
+            ChallengesCalculator.records(profileId, l, year, allRaces, challengeResults).beaten
+        }
+        val activePassportValue = activeProfile?.let { passports[it.profileId] }
+        val badges = activeProfile?.let { p ->
+            ChallengesCalculator.badges(
+                profileId = p.profileId,
+                trioProfileIds = profiles.map { it.profileId },
+                allRaces = allRaces,
+                allResults = bundle.allResults,
+                courseFactors = factorsByRace,
+                weatherByRaceId = weatherByRaceId,
+                recordsBeatenEver = availableSeasons.sumOf { y -> beatenIn(p.profileId, y) },
+                villagesVisited = activePassportValue?.visited?.size ?: 0
+            )
+        }.orEmpty()
+        val trioChallenges = ChallengesCalculator.trioChallenges(
+            seasonYear = activeSeasonYear,
+            trioProfileIds = profiles.map { it.profileId },
+            allRaces = allRaces,
+            allResults = bundle.allResults
+        )
+        val goalSeason = if (activeSummary != null && SeasonInsightsCalculator.isSeasonOver(activeSummary)) {
+            activeSeasonYear + 1
+        } else activeSeasonYear
+        val goals = activeProfile?.let { p ->
+            val preferredLabel = if (p.preferredDistanceKm == 5) "5 km" else "10 km"
+            val lastSeasonRecords = ChallengesCalculator.records(p.profileId, preferredLabel, goalSeason, allRaces, challengeResults)
+            GoalsCalculator.progress(
+                profileId = p.profileId,
+                goalSeason = goalSeason,
+                preferredDistanceLabel = preferredLabel,
+                goals = bundle.seasonGoals,
+                allRaces = allRaces,
+                allResults = bundle.allResults,
+                recordsBeatenInSeason = beatenIn(p.profileId, goalSeason),
+                newVillagesInSeason = activePassportValue?.visited?.count { it.firstSeason == goalSeason } ?: 0,
+                coursesRunTwiceAvailable = lastSeasonRecords.records.count { it.status == com.example.domain.RecordStatus.TO_BEAT }
+            )
+        }.orEmpty()
+
         val overridesByRaceAndProfile = allOverrides.groupBy { it.raceId }
             .mapValues { (_, list) -> list.associateBy { it.profileId } }
         val terrainWeatherByRaceAndProfile = allTerrainWeather.groupBy { it.raceId }
@@ -412,13 +494,27 @@ class AlgViewModel(
             activePassport = activeProfile?.let { passports[it.profileId] },
             trioRecaps = trioRecaps,
             activeRecap = activeRecap,
-            seasonBibsDeclared = bibsDeclared
+            seasonBibsDeclared = bibsDeclared,
+            diagnostics = bundle.diagnostics,
+            foundResultCounts = challengeResults.groupBy { it.profileId }.mapValues { (_, l) ->
+                l.groupBy { it.seasonYear }.mapValues { (_, ls) -> ls.groupingBy { it.distanceLabel }.eachCount() }
+            },
+            records = records,
+            badges = badges,
+            trioChallenges = trioChallenges,
+            goalSeason = goalSeason,
+            goals = goals,
+            villageInfos = bundle.villageInfos.associateBy { it.villageKey },
+            villageMapPoints = activeProfile?.let {
+                com.example.domain.VillageMapCalculator.points(it.profileId, allRaces, bundle.allResults)
+            }.orEmpty()
         )
     }
 
     init {
         viewModelScope.launch {
             repository.ensureSeeded()
+            repository.refreshDiagnostics()
             syncMyChronoSeason()
         }
     }
@@ -672,6 +768,17 @@ class AlgViewModel(
                 categoryLabel = entry.category
             )
         }
+    }
+
+    fun setSeasonGoal(goalType: String, target: Int) {
+        val state = uiState.value
+        viewModelScope.launch {
+            repository.setSeasonGoal(state.selectedProfileId, state.goalSeason, goalType, target)
+        }
+    }
+
+    fun loadVillageInfo(village: String) {
+        viewModelScope.launch { repository.loadVillageInfo(village) }
     }
 
     fun importGpxForRace(context: Context, raceId: String, profileId: String, uri: Uri) {

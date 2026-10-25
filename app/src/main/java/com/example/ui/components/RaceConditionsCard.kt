@@ -27,6 +27,10 @@ import androidx.compose.ui.unit.dp
 import com.example.data.local.RaceWeatherEntity
 import com.example.data.remote.OpenMeteoClient
 import com.example.domain.CourseDifficultyCalculator
+import com.example.domain.CourseRecord
+import com.example.domain.GoalsCalculator
+import com.example.domain.RecordStatus
+import androidx.compose.material.icons.filled.EmojiEvents
 import com.example.domain.RaceItemWithContext
 
 /** Résumé météo réel (Open-Meteo) : « 9,4 °C à 10 h • Pluie • 12 mm sur les 3 jours précédents ». */
@@ -49,6 +53,7 @@ fun RaceConditionsCard(
     raceItem: RaceItemWithContext,
     distanceKm: Int,
     terrainCondition: String,
+    record: CourseRecord? = null,
     modifier: Modifier = Modifier
 ) {
     val factor = raceItem.courseFactorForDistance(distanceKm)
@@ -77,6 +82,19 @@ fun RaceConditionsCard(
                     else -> "Indice inconnu (pas assez de coureurs réguliers, ou course pas encore courue)"
                 } + if (terrainCondition.isNotBlank()) " • terrain noté : $terrainCondition" else ""
             )
+            if (record != null && record.distanceLabel == (if (distanceKm == 5) "5 km" else "10 km")) {
+                ConditionLine(
+                    icon = Icons.Default.EmojiEvents,
+                    title = "Record de parcours",
+                    text = record.editions.joinToString(" • ") { "${it.seasonYear} : ${it.timeFormatted}" } +
+                        when (record.status) {
+                            RecordStatus.BEATEN -> " — battu (${GoalsCalculator.formatDelta(record.deltaSeconds ?: 0)})"
+                            RecordStatus.NOT_BEATEN -> " — pas battu (${GoalsCalculator.formatDelta(record.deltaSeconds ?: 0)})"
+                            RecordStatus.TO_BEAT -> " — à battre : ${record.best.timeFormatted}"
+                            RecordStatus.FIRST -> ""
+                        }
+                )
+            }
             val w = raceItem.weather
             ConditionLine(
                 icon = Icons.Default.Cloud,

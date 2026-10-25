@@ -22,14 +22,18 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         MyChronoRowEntity::class,
         RaceFetchStateEntity::class,
         CourseFactorEntity::class,
-        RaceWeatherEntity::class
+        RaceWeatherEntity::class,
+        SeasonGoalEntity::class,
+        VillageInfoEntity::class
     ],
-    version = 8,
+    version = 9,
     // Le schéma de chaque version est enregistré dans app/schemas (commité par le build GitHub).
     // Chaque montée de version passe par une migration qui conserve dossards, résultats, GPX et notes.
     autoMigrations = [
         AutoMigration(from = 6, to = 7, spec = AlgDatabase.CleanInventedDataSpec::class),
-        AutoMigration(from = 7, to = 8, spec = AlgDatabase.SeasonBibsSpec::class)
+        AutoMigration(from = 7, to = 8, spec = AlgDatabase.SeasonBibsSpec::class),
+        // 8 → 9 : objectifs de saison et fiches villages (nouvelles tables, rien d'autre ne change).
+        AutoMigration(from = 8, to = 9)
     ],
     exportSchema = true
 )

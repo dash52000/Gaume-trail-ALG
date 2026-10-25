@@ -108,7 +108,8 @@ fun RaceDetailModalScreen(
         simulatedTargetPoints: Int?
     ) -> Unit,
     onSelectRunnerProfile: (String) -> Unit,
-    onImportGpxFile: (Uri) -> Unit
+    onImportGpxFile: (Uri) -> Unit,
+    courseRecord: com.example.domain.CourseRecord? = null
 ) {
     BackHandler { onClose() }
 
@@ -343,7 +344,8 @@ fun RaceDetailModalScreen(
             RaceConditionsCard(
                 raceItem = raceItem,
                 distanceKm = distanceKm,
-                terrainCondition = terrainCondition
+                terrainCondition = terrainCondition,
+                record = courseRecord
             )
 
             // 4. COMPARAISON DU TRIO SUR CETTE MANCHE

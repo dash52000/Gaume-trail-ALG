@@ -279,3 +279,28 @@ data class RaceWeatherEntity(
     val source: String,
     val fetchedAtEpochMillis: Long
 )
+
+/** Objectif de saison fixé par le coureur (ex. 3 records de parcours battus en 2027). */
+@Entity(
+    tableName = "season_goals",
+    primaryKeys = ["profileId", "seasonYear", "goalType"]
+)
+data class SeasonGoalEntity(
+    val profileId: String,
+    val seasonYear: Int,
+    /** "challenge", "records", "villages", "races", "km". */
+    val goalType: String,
+    val target: Int
+)
+
+/** Fiche d'un village tirée de Wikipédia (résumé et lien), gardée sur le téléphone. */
+@Entity(tableName = "village_info")
+data class VillageInfoEntity(
+    @PrimaryKey val villageKey: String,
+    /** false = aucune page Wikipédia fiable trouvée (on ne réessaie pas à chaque fois). */
+    val found: Boolean,
+    val title: String?,
+    val extract: String?,
+    val pageUrl: String?,
+    val fetchedAtEpochMillis: Long
+)

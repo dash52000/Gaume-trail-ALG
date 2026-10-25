@@ -31,6 +31,11 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.platform.LocalContext
+import com.example.data.local.GaumeInitialSeedData
+import com.example.data.local.VillageInfoEntity
 import com.example.domain.PassportVillage
 import com.example.domain.VillagePassport
 import com.example.ui.theme.SemoisRiverTeal
@@ -41,6 +46,8 @@ fun VillagePassportCard(
     runnerName: String,
     passport: VillagePassport,
     onOpenRaceDetail: (String) -> Unit,
+    villageInfos: Map<String, VillageInfoEntity> = emptyMap(),
+    onRequestVillageInfo: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -96,13 +103,23 @@ fun VillagePassportCard(
         }
 
         passport.visited.forEach { village ->
-            PassportVillageRow(village = village, onOpenRaceDetail = onOpenRaceDetail)
+            PassportVillageRow(
+                village = village,
+                info = villageInfos[GaumeInitialSeedData.normalizeKey(village.village)],
+                onOpenRaceDetail = onOpenRaceDetail,
+                onRequestVillageInfo = onRequestVillageInfo
+            )
         }
     }
 }
 
 @Composable
-private fun PassportVillageRow(village: PassportVillage, onOpenRaceDetail: (String) -> Unit) {
+private fun PassportVillageRow(
+    village: PassportVillage,
+    info: VillageInfoEntity?,
+    onOpenRaceDetail: (String) -> Unit,
+    onRequestVillageInfo: (String) -> Unit
+) {
     var expanded by remember(village.village) { mutableStateOf(false) }
     Card(
         modifier = Modifier
@@ -141,6 +158,7 @@ private fun PassportVillageRow(village: PassportVillage, onOpenRaceDetail: (Stri
                 }
             }
             if (expanded) {
+                LaunchedEffect(village.village) { onRequestVillageInfo(village.village) }
                 village.visits.forEach { v ->
                     Text(
                         text = "${v.dateIso} • ${v.raceTitle.substringAfter("— ")} • ${v.distanceName} • ${v.timeFormatted}" +
@@ -152,7 +170,35 @@ private fun PassportVillageRow(village: PassportVillage, onOpenRaceDetail: (Stri
                             .padding(vertical = 2.dp)
                     )
                 }
+                VillageInfoBlock(village = village.village, visits = village.visits.size, info = info, showHeader = false)
             }
         }
     }
 }
+
+@Composable
+fun VillageInfoBlock(village: String, visits: Int, info: VillageInfoEntity?, showHeader: Boolean = true) {
+    val context = LocalContext.current
+    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        if (showHeader) {
+            Text(
+                "$village • " + if (visits > 0) "$visits course(s)" else "jamais couru",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold
+            )
+        }
+        when {
+            info == null -> Text("Recherche de la fiche…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            !info.found -> Text("Pas de fiche Wikipédia fiable pour ce village.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            else -> {
+                Text(info.extract.orEmpty(), style = MaterialTheme.typography.bodySmall)
+                if (!info.pageUrl.isNullOrBlank()) {
+                    TextButton(onClick = { openExternalUrl(context, info.pageUrl) }) {
+                        Text("Source : Wikipédia (« ${info.title} »)", style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+            }
+        }
+    }
+}
+

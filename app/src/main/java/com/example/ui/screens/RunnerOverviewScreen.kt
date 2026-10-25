@@ -64,6 +64,15 @@ import com.example.data.local.RunnerProfileEntity
 import com.example.domain.ProfileChallengeStanding
 import com.example.domain.SameCourseYearComparison
 import com.example.domain.SeasonRecap
+import com.example.domain.CourseRecord
+import com.example.domain.FactBadge
+import com.example.domain.GoalProgress
+import com.example.domain.GoalsCalculator
+import com.example.domain.RecordStatus
+import com.example.domain.RecordsSummary
+import com.example.domain.TrioChallenge
+import com.example.domain.VillageMapPoint
+import com.example.data.local.VillageInfoEntity
 import com.example.domain.VillagePassport
 import com.example.ui.components.SeasonRecapCard
 import com.example.ui.components.VillagePassportCard
@@ -101,6 +110,15 @@ fun RunnerOverviewScreen(
     passport: VillagePassport? = null,
     activeRecap: SeasonRecap? = null,
     trioRecaps: Map<String, SeasonRecap> = emptyMap(),
+    records: RecordsSummary? = null,
+    badges: List<FactBadge> = emptyList(),
+    trioChallenges: List<TrioChallenge> = emptyList(),
+    goalSeason: Int = summary?.seasonYear ?: 0,
+    goals: List<GoalProgress> = emptyList(),
+    villageMapPoints: List<VillageMapPoint> = emptyList(),
+    villageInfos: Map<String, VillageInfoEntity> = emptyMap(),
+    onSetGoal: (goalType: String, target: Int) -> Unit = { _, _ -> },
+    onRequestVillageInfo: (String) -> Unit = {},
     onSelectDistanceKm: (Int) -> Unit,
     onSelectFilterMode: (RaceFilterMode) -> Unit,
     onOpenRaceDetail: (String) -> Unit,
@@ -336,6 +354,7 @@ fun RunnerOverviewScreen(
                         RaceRoundOverviewCard(
                             item = item,
                             selectedDistanceKm = selectedDistanceKm,
+                            courseRecord = records?.byRaceId?.get(item.race.raceId),
                             pronosticEntry = if (activeDistanceSummary.hasAssignedBib) {
                                 seasonPronostics.allPronosticsByRaceId[item.race.raceId]
                             } else null,
@@ -406,15 +425,25 @@ fun RunnerOverviewScreen(
             }
 
             AlgBottomTab.BADGES -> {
-                // ONGLET 4 : PASSEPORT DES VILLAGES (toutes saisons)
+                // ONGLET 4 : DÉFIS (records de parcours, badges, Trio, villages, objectifs)
                 item {
-                    if (passport != null) {
-                        VillagePassportCard(
-                            runnerName = summary.profile.displayName,
-                            passport = passport,
-                            onOpenRaceDetail = onOpenRaceDetail
-                        )
-                    }
+                    com.example.ui.screens.ChallengesContent(
+                        runnerName = summary.profile.displayName,
+                        seasonYear = summary.seasonYear,
+                        selectedDistanceKm = selectedDistanceKm,
+                        records = records,
+                        badges = badges,
+                        trioChallenges = trioChallenges,
+                        goalSeason = goalSeason,
+                        goals = goals,
+                        passport = passport,
+                        mapPoints = villageMapPoints,
+                        villageInfos = villageInfos,
+                        onSelectDistanceKm = onSelectDistanceKm,
+                        onOpenRaceDetail = onOpenRaceDetail,
+                        onSetGoal = onSetGoal,
+                        onRequestVillageInfo = onRequestVillageInfo
+                    )
                 }
             }
 
@@ -1050,6 +1079,7 @@ private fun KpiStatCard(
 private fun RaceRoundOverviewCard(
     item: RaceItemWithContext,
     selectedDistanceKm: Int,
+    courseRecord: CourseRecord? = null,
     pronosticEntry: GaumeRacePronosticEntry? = null,
     onClick: () -> Unit,
     onShareCardClick: () -> Unit = {}
@@ -1227,6 +1257,9 @@ private fun RaceRoundOverviewCard(
                     }
                 }
             }
+
+            // Record de parcours : duel contre les éditions précédentes
+            courseRecord?.let { RecordHintLine(it) }
 
             // LIGNE 3 : Pronostic Prévu vs Réel + Accès direct Carte Bilan
             if (pronosticEntry != null || resultForSelectedDist != null) {
@@ -1427,4 +1460,23 @@ private fun HorsChallengeRaceCard(item: RaceItemWithContext, onClick: () -> Unit
             }
         }
     }
+}
+
+@Composable
+private fun RecordHintLine(record: CourseRecord) {
+    val ref = record.bestBefore
+    val (text, color) = when (record.status) {
+        RecordStatus.BEATEN -> "Record de parcours battu : ${GoalsCalculator.formatDelta(record.deltaSeconds ?: 0)} sur ${ref?.seasonYear ?: ""}" to CountingTop15BadgeGreen
+        RecordStatus.NOT_BEATEN -> "${GoalsCalculator.formatDelta(record.deltaSeconds ?: 0)} sur ton record (${ref?.timeFormatted ?: ""}, ${ref?.seasonYear ?: ""})" to ClayTerracotta
+        RecordStatus.TO_BEAT -> "Record à battre : ${record.best.timeFormatted} (${record.best.seasonYear})" to GoldPodium
+        RecordStatus.FIRST -> return
+    }
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelMedium,
+        fontWeight = FontWeight.Bold,
+        color = color,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis
+    )
 }

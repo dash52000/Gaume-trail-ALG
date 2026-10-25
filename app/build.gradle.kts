@@ -16,8 +16,10 @@ android {
     applicationId = "com.aistudio.gaumetrail.vkrxpm"
     minSdk = 24
     targetSdk = 36
-    versionCode = 1
-    versionName = "1.0"
+    // Numéro du build GitHub : la version affichée dans l'appli est celle de la Release (v1.0.N).
+    val ciRun = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
+    versionCode = ciRun ?: 1
+    versionName = "1.0.${ciRun ?: 0}"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }

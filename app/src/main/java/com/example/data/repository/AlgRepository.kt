@@ -22,15 +22,40 @@ import com.example.data.local.SeasonBibEntity
 import com.example.data.remote.MyChronoApiClient
 import com.example.data.remote.MyChronoRawResultRow
 import com.example.data.remote.OpenMeteoClient
+import com.example.data.remote.WikipediaClient
+import com.example.data.local.SeasonGoalEntity
+import com.example.data.local.VillageInfoEntity
 import com.example.domain.ChallengeStandingsCalculator
 import com.example.domain.CourseDifficultyCalculator
 import com.example.domain.GpxAndTrackUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.time.LocalDate
+
+/** Ce que MyChrono publie sous l'identifiant d'un profil, pour vérifier qu'il est le bon. */
+data class ProfileIdentityReport(
+    val profileId: String,
+    val runnerId: String,
+    val myChronoName: String?,
+    /** Saison → distance ("10 km" / "5 km") → nombre de manches publiées sous cet identifiant. */
+    val publishedBySeason: Map<Int, Map<String, Int>>
+)
+
+data class SyncDiagnostics(
+    val profiles: List<ProfileIdentityReport> = emptyList(),
+    /** Saison → nombre de courses dont le classement est gardé sur le téléphone. */
+    val cachedRacesBySeason: Map<Int, Int> = emptyMap(),
+    /** Saison → nombre de courses dont MyChrono a publié le classement. */
+    val publishedRacesBySeason: Map<Int, Int> = emptyMap(),
+    /** Corrections d'identifiant faites à la dernière synchro. */
+    val repairs: List<String> = emptyList()
+)
 
 class AlgRepository(
     private val algDao: AlgDao,
@@ -38,7 +63,8 @@ class AlgRepository(
     private val openMeteoClient: OpenMeteoClient = OpenMeteoClient(),
     private val today: () -> LocalDate = { LocalDate.now() },
     /** Pour regrouper les écritures (l'écran ne voit jamais une saison à moitié recalculée). */
-    private val database: AlgDatabase? = null
+    private val database: AlgDatabase? = null,
+    private val wikipediaClient: WikipediaClient = WikipediaClient()
 ) {
     companion object {
         /** Première saison publiée par MyChrono pour le Challenge des Allures Libres de Gaume. */
@@ -52,6 +78,9 @@ class AlgRepository(
     }
 
     private val recomputeMutex = Mutex()
+
+    private val diagnosticsState = MutableStateFlow(SyncDiagnostics())
+    val diagnosticsFlow: StateFlow<SyncDiagnostics> = diagnosticsState.asStateFlow()
 
     private suspend fun <T> inTransaction(block: suspend () -> T): T {
         val db = database ?: return block()
@@ -69,6 +98,37 @@ class AlgRepository(
     val seasonBibsFlow: Flow<List<SeasonBibEntity>> = algDao.observeSeasonBibs()
     val courseFactorsFlow: Flow<List<CourseFactorEntity>> = algDao.observeCourseFactors()
     val raceWeatherFlow: Flow<List<RaceWeatherEntity>> = algDao.observeRaceWeather()
+    val seasonGoalsFlow: Flow<List<SeasonGoalEntity>> = algDao.observeSeasonGoals()
+    val villageInfoFlow: Flow<List<VillageInfoEntity>> = algDao.observeVillageInfo()
+
+    /** Fixe (ou retire, si target ≤ 0) un objectif de saison. */
+    suspend fun setSeasonGoal(profileId: String, seasonYear: Int, goalType: String, target: Int) = withContext(Dispatchers.IO) {
+        if (target <= 0) algDao.deleteSeasonGoal(profileId, seasonYear, goalType)
+        else algDao.upsertSeasonGoal(SeasonGoalEntity(profileId, seasonYear, goalType, target))
+    }
+
+    /**
+     * Fiche Wikipédia d'un village, chargée à la demande puis gardée sur le téléphone.
+     * Un village sans page fiable n'est réessayé qu'au bout de 30 jours.
+     */
+    suspend fun loadVillageInfo(village: String) = withContext(Dispatchers.IO) {
+        val key = GaumeInitialSeedData.normalizeKey(village)
+        val existing = algDao.getVillageInfo(key)
+        val monthAgo = System.currentTimeMillis() - 30L * 24 * 3600 * 1000
+        if (existing != null && (existing.found || existing.fetchedAtEpochMillis > monthAgo)) return@withContext
+        wikipediaClient.fetchVillageSummary(village).onSuccess { summary ->
+            algDao.upsertVillageInfo(
+                VillageInfoEntity(
+                    villageKey = key,
+                    found = summary != null,
+                    title = summary?.title,
+                    extract = summary?.extract,
+                    pageUrl = summary?.pageUrl,
+                    fetchedAtEpochMillis = System.currentTimeMillis()
+                )
+            )
+        }
+    }
 
     /** Saisons proposées : de 2025 (saison de référence) à l'année en cours. */
     fun getAvailableSeasons(): List<Int> = (FIRST_SEASON..maxOf(FIRST_SEASON, today().year)).toList()
@@ -200,7 +260,9 @@ class AlgRepository(
         val raceById = allRaces.associateBy { it.raceId }
         fetched.forEach { (raceId, rows) -> raceById[raceId]?.let { storeRows(it, rows) } }
 
+        val repairs = repairRunnerIds()
         recomputeAllSeasons()
+        refreshDiagnostics(repairs)
         val weatherCount = runCatching { fetchMissingWeather(now) }.getOrDefault(0)
 
         val stamp = System.currentTimeMillis()
@@ -222,6 +284,7 @@ class AlgRepository(
                     }
                 )
                 if (weatherCount > 0) append(" • météo de $weatherCount course(s)")
+                repairs.forEach { append(" • $it") }
                 val failed = toFetch.size - fetched.size
                 if (failed > 0) append(" • $failed course(s) injoignable(s)")
             }
@@ -304,6 +367,78 @@ class AlgRepository(
         }
     }
 
+    private fun nameTokens(name: String): Set<String> =
+        GaumeInitialSeedData.normalizeKey(name).split(" ").filter { it.length >= 2 }.toSet()
+
+    /**
+     * Vérifie l'identifiant MyChrono de chaque profil à partir des résultats gardés sur le téléphone.
+     * Il est corrigé s'il est vide, inconnu de MyChrono, ou porté par un coureur d'un autre nom
+     * (profil avec prénom et nom). Le bon identifiant est celui qui porte les dossards de la saison
+     * et/ou dont le nom correspond au profil, sur au moins deux courses.
+     */
+    suspend fun repairRunnerIds(): List<String> = withContext(Dispatchers.IO) {
+        val messages = mutableListOf<String>()
+        val seasonBibs = algDao.getSeasonBibsSnapshot()
+        for (p in algDao.getRunnerProfilesSnapshot()) {
+            val tokens = nameTokens(p.displayName)
+            val id = p.myChronoRunnerId.trim()
+            val idRows = if (id.isBlank()) emptyList() else algDao.countRowsForRunners(listOf(id))
+            val idName = idRows.maxByOrNull { it.n }?.fullName
+            val idLooksRight = idRows.isNotEmpty() &&
+                (tokens.size < 2 || idName == null || nameTokens(idName).intersect(tokens).isNotEmpty())
+            if (idLooksRight) continue
+
+            val byBib = seasonBibs.filter { it.profileId == p.profileId }.flatMap { sb ->
+                listOf("10 km" to sb.bib10km, "5 km" to sb.bib5km)
+                    .map { (label, bib) -> label to bib.trim().removePrefix("#") }
+                    .filter { it.second.isNotBlank() }
+                    .flatMap { (label, bib) -> algDao.runnersWearingBib(sb.seasonYear, label, bib) }
+            }.filter { tokens.size < 2 || nameTokens(it.fullName).intersect(tokens).isNotEmpty() }
+
+            val byName = if (tokens.size >= 2) {
+                algDao.runnersNamedLike("%" + tokens.maxByOrNull { it.length }!! + "%")
+                    .filter { nameTokens(it.fullName).containsAll(tokens) }
+            } else emptyList()
+
+            val best = (byBib + byName)
+                .groupBy { it.runnerId }
+                .mapValues { (_, list) -> list.distinctBy { it.seasonYear to it.distanceLabel }.sumOf { it.n } }
+                .maxByOrNull { it.value }
+                ?.takeIf { it.value >= 2 }
+                ?.key ?: continue
+            if (best == id) continue
+
+            algDao.upsertRunnerProfile(p.copy(myChronoRunnerId = best))
+            messages += "identifiant MyChrono de ${p.displayName.substringBefore(" ")} corrigé (${id.ifBlank { "vide" }} → $best)"
+        }
+        messages
+    }
+
+    /** Met à jour le diagnostic affiché dans les réglages. */
+    suspend fun refreshDiagnostics(repairs: List<String> = diagnosticsState.value.repairs) = withContext(Dispatchers.IO) {
+        val profiles = algDao.getRunnerProfilesSnapshot()
+        val ids = profiles.map { it.myChronoRunnerId.trim() }.filter { it.isNotBlank() }.distinct()
+        val counts = if (ids.isEmpty()) emptyList() else algDao.countRowsForRunners(ids)
+        val now = today()
+        diagnosticsState.value = SyncDiagnostics(
+            profiles = profiles.map { p ->
+                val mine = counts.filter { it.runnerId == p.myChronoRunnerId.trim() }
+                ProfileIdentityReport(
+                    profileId = p.profileId,
+                    runnerId = p.myChronoRunnerId.trim(),
+                    myChronoName = mine.maxByOrNull { it.n }?.fullName,
+                    publishedBySeason = mine.groupBy { it.seasonYear }
+                        .mapValues { (_, l) -> l.associate { it.distanceLabel to it.n } }
+                )
+            },
+            cachedRacesBySeason = algDao.cachedRaceCountBySeason().associate { it.seasonYear to it.n },
+            publishedRacesBySeason = algDao.getAllRacesSnapshot()
+                .filter { hasPublishedResults(it, now) }
+                .groupingBy { it.seasonYear }.eachCount(),
+            repairs = repairs
+        )
+    }
+
     /** Météo réelle des courses courues par le Trio (une seule fois par course). */
     private suspend fun fetchMissingWeather(now: LocalDate): Int {
         val known = algDao.getRaceWeatherSnapshot().map { it.raceId }.toSet()
@@ -376,8 +511,10 @@ class AlgRepository(
         if (algDao.getRowsForSeason(seasonYear).isEmpty()) {
             syncAll()
         } else {
+            val repairs = repairRunnerIds()
             recomputeSeason(seasonYear)
-            Result.success("Saison $seasonYear recalculée")
+            refreshDiagnostics(repairs)
+            Result.success((listOf("Saison $seasonYear recalculée") + repairs).joinToString(" • "))
         }
     }
 

@@ -188,4 +188,58 @@ interface AlgDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertRaceWeather(entity: RaceWeatherEntity)
+
+    // --- Identité MyChrono des profils (diagnostic et réparation) ---
+    @Query(
+        "SELECT runnerId, seasonYear, distanceLabel, MAX(fullName) AS fullName, COUNT(*) AS n FROM mychrono_rows " +
+            "WHERE runnerId IN (:runnerIds) AND isChallenge = 1 GROUP BY runnerId, seasonYear, distanceLabel"
+    )
+    suspend fun countRowsForRunners(runnerIds: List<String>): List<RunnerSeasonCount>
+
+    @Query(
+        "SELECT runnerId, seasonYear, distanceLabel, MAX(fullName) AS fullName, COUNT(*) AS n FROM mychrono_rows " +
+            "WHERE seasonYear = :seasonYear AND distanceLabel = :distanceLabel AND bibNumber = :bib AND isChallenge = 1 " +
+            "AND runnerId != '' GROUP BY runnerId, seasonYear, distanceLabel"
+    )
+    suspend fun runnersWearingBib(seasonYear: Int, distanceLabel: String, bib: String): List<RunnerSeasonCount>
+
+    @Query(
+        "SELECT runnerId, seasonYear, distanceLabel, MAX(fullName) AS fullName, COUNT(*) AS n FROM mychrono_rows " +
+            "WHERE fullName LIKE :pattern AND runnerId != '' GROUP BY runnerId, seasonYear, distanceLabel"
+    )
+    suspend fun runnersNamedLike(pattern: String): List<RunnerSeasonCount>
+
+    @Query("SELECT seasonYear, COUNT(DISTINCT raceId) AS n FROM mychrono_rows GROUP BY seasonYear")
+    suspend fun cachedRaceCountBySeason(): List<SeasonCount>
+
+    // --- Objectifs de saison ---
+    @Query("SELECT * FROM season_goals")
+    fun observeSeasonGoals(): Flow<List<SeasonGoalEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertSeasonGoal(goal: SeasonGoalEntity)
+
+    @Query("DELETE FROM season_goals WHERE profileId = :profileId AND seasonYear = :seasonYear AND goalType = :goalType")
+    suspend fun deleteSeasonGoal(profileId: String, seasonYear: Int, goalType: String)
+
+    // --- Fiches villages (Wikipédia) ---
+    @Query("SELECT * FROM village_info")
+    fun observeVillageInfo(): Flow<List<VillageInfoEntity>>
+
+    @Query("SELECT * FROM village_info WHERE villageKey = :key LIMIT 1")
+    suspend fun getVillageInfo(key: String): VillageInfoEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertVillageInfo(info: VillageInfoEntity)
 }
+
+/** Nombre de résultats d'un identifiant MyChrono, par saison et par distance. */
+data class RunnerSeasonCount(
+    val runnerId: String,
+    val seasonYear: Int,
+    val distanceLabel: String,
+    val fullName: String,
+    val n: Int
+)
+
+data class SeasonCount(val seasonYear: Int, val n: Int)

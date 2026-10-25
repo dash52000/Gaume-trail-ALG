@@ -217,3 +217,35 @@ object SeasonInsightsCalculator {
         )
     }
 }
+
+/** Un village sur la carte du passeport, avec le nombre de courses du coureur par saison. */
+data class VillageMapPoint(
+    val village: String,
+    val key: String,
+    val latitude: Double,
+    val longitude: Double,
+    val visitsBySeason: Map<Int, Int>,
+    /** Saisons où le village a au moins une course au calendrier. */
+    val calendarSeasons: Set<Int>
+)
+
+object VillageMapCalculator {
+    fun points(profileId: String, allRaces: List<RaceEntity>, allResults: List<RaceResultEntity>): List<VillageMapPoint> {
+        val mineByRace = allResults.filter { it.profileId == profileId }.map { it.raceId }.toSet()
+        return allRaces.groupBy {
+            GaumeInitialSeedData.normalizeKey(GaumeInitialSeedData.resolveGaumeGeoForRace(it).canonicalVillage)
+        }.mapNotNull { (key, races) ->
+            val geos = races.map { GaumeInitialSeedData.resolveGaumeGeoForRace(it) }
+            val located = geos.filter { it.latitude != null && it.longitude != null }
+            if (located.isEmpty()) return@mapNotNull null
+            VillageMapPoint(
+                village = geos.first().canonicalVillage,
+                key = key,
+                latitude = located.map { it.latitude!! }.average(),
+                longitude = located.map { it.longitude!! }.average(),
+                visitsBySeason = races.filter { it.raceId in mineByRace }.groupingBy { it.seasonYear }.eachCount(),
+                calendarSeasons = races.map { it.seasonYear }.toSet()
+            )
+        }
+    }
+}
