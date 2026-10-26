@@ -41,7 +41,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -202,16 +206,64 @@ class AlgViewModel(
         )
     }
 
-    val uiState: StateFlow<AlgUiState> = combine(
-        dataBundleFlow,
-        controlFlow
-    ) { bundle, ctrl -> buildUiState(bundle, ctrl) }
+    /** Ce qui oblige à tout recalculer : la saison, le profil et la distance affichés. */
+    private data class ComputeKey(val seasonYear: Int?, val profileId: String, val distanceKm: Int)
+
+    /**
+     * Calculs lourds (bilans, records, badges, passeports…) : refaits seulement quand les données changent
+     * (après une synchro, une saisie) ou quand saison, profil ou distance changent — pas à chaque tap.
+     * Les écritures en rafale d'une synchro sont regroupées.
+     */
+    @OptIn(FlowPreview::class)
+    private val computedFlow = combine(
+        dataBundleFlow.debounce(150),
+        controlFlow.map { ComputeKey(it.selectedSeasonYear, it.selectedProfileId, it.selectedChallengeDistanceKm) }
+            .distinctUntilChanged()
+    ) { bundle, key ->
+        bundle to buildUiState(
+            bundle,
+            ControlState(
+                selectedSeasonYear = key.seasonYear,
+                selectedProfileId = key.profileId,
+                selectedChallengeDistanceKm = key.distanceKm
+            )
+        )
+    }.flowOn(Dispatchers.Default)
+
+    /** État de l'écran : les calculs ci-dessus + l'état des contrôles (onglet, filtres, fiche ouverte…). */
+    val uiState: StateFlow<AlgUiState> = combine(computedFlow, controlFlow) { (bundle, computed), ctrl ->
+        computed.copy(
+            isSyncingMyChrono = ctrl.isSyncingMyChrono,
+            selectedTab = ctrl.selectedTab,
+            perfsSubTab = ctrl.perfsSubTab,
+            preselectedShareRaceId = ctrl.preselectedShareRaceId,
+            raceFilterMode = ctrl.raceFilterMode,
+            selectedRaceIdForDetail = ctrl.selectedRaceIdForDetail,
+            showTop15SimulatorModal = ctrl.showTop15SimulatorModal,
+            directorySearchQuery = ctrl.directorySearchQuery,
+            directorySearchResults = filterDirectory(bundle.directory, ctrl.directorySearchQuery),
+            statusBannerMessage = ctrl.statusBannerMessage
+        )
+    }
         .flowOn(Dispatchers.Default)
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5_000),
             initialValue = AlgUiState()
         )
+
+    /** Annuaire MyChrono : rien tant qu'on n'a pas tapé au moins 2 caractères (il compte des milliers de coureurs). */
+    private fun filterDirectory(directory: List<MyChronoDirectoryEntry>, query: String): List<MyChronoDirectoryEntry> {
+        val q = query.trim().lowercase()
+        if (q.length < 2) return emptyList()
+        return directory.filter {
+            it.fullName.lowercase().contains(q) ||
+                it.club.lowercase().contains(q) ||
+                it.myChronoRunnerId.lowercase().contains(q) ||
+                it.defaultBib10km.lowercase().contains(q) ||
+                it.defaultBib5km.lowercase().contains(q)
+        }.take(100)
+    }
 
     /**
      * Dossards d'un profil pour une saison, distance par distance : celui saisi, sinon celui porté
@@ -451,19 +503,6 @@ class AlgViewModel(
         val terrainWeatherByRaceAndProfile = allTerrainWeather.groupBy { it.raceId }
             .mapValues { (_, list) -> list.associateBy { it.profileId } }
 
-        val filteredDirectory = if (ctrl.directorySearchQuery.isBlank()) {
-            bundle.directory
-        } else {
-            val q = ctrl.directorySearchQuery.trim().lowercase()
-            bundle.directory.filter {
-                it.fullName.lowercase().contains(q) ||
-                    it.club.lowercase().contains(q) ||
-                    it.myChronoRunnerId.lowercase().contains(q) ||
-                    it.defaultBib10km.lowercase().contains(q) ||
-                    it.defaultBib5km.lowercase().contains(q)
-            }
-        }
-
         return AlgUiState(
             isLoading = profiles.isEmpty(),
             isSyncingMyChrono = ctrl.isSyncingMyChrono,
@@ -486,7 +525,7 @@ class AlgViewModel(
             comparisonYearB = yearB,
             bibOverridesByRaceAndProfile = overridesByRaceAndProfile,
             terrainWeatherByRaceAndProfile = terrainWeatherByRaceAndProfile,
-            directorySearchResults = filteredDirectory,
+            directorySearchResults = emptyList(),
             directorySearchQuery = ctrl.directorySearchQuery,
             statusBannerMessage = ctrl.statusBannerMessage,
             trioStandings = trioStandings,
@@ -775,6 +814,24 @@ class AlgViewModel(
 
     fun loadVillageInfo(village: String) {
         viewModelScope.launch { repository.loadVillageInfo(village) }
+    }
+
+    fun exportUserData(context: Context, uri: Uri) {
+        viewModelScope.launch {
+            val res = repository.exportUserDataTo(context, uri)
+            controlFlow.value = controlFlow.value.copy(
+                statusBannerMessage = res.fold(onSuccess = { it }, onFailure = { "Sauvegarde impossible : ${it.message}" })
+            )
+        }
+    }
+
+    fun importUserData(context: Context, uri: Uri) {
+        viewModelScope.launch {
+            val res = repository.importUserDataFrom(context, uri)
+            controlFlow.value = controlFlow.value.copy(
+                statusBannerMessage = res.fold(onSuccess = { it }, onFailure = { "Restauration impossible : ${it.message}" })
+            )
+        }
     }
 
     fun importGpxForRace(context: Context, raceId: String, profileId: String, uri: Uri) {

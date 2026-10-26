@@ -1,5 +1,8 @@
 package com.example.ui.screens
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -29,6 +32,8 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.PersonSearch
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Restore
+import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -94,8 +99,16 @@ fun SettingsAndAssociationScreen(
     onPurgeAndResyncCleanResults: () -> Unit = { onTriggerMyChronoSync(selectedSeasonYear) },
     diagnostics: SyncDiagnostics = SyncDiagnostics(),
     foundResultCounts: Map<String, Map<Int, Map<String, Int>>> = emptyMap(),
+    onExportUserData: (Uri) -> Unit = {},
+    onImportUserData: (Uri) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        if (uri != null) onExportUserData(uri)
+    }
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) onImportUserData(uri)
+    }
     var activeTargetProfileId by remember { mutableStateOf("me") }
     var profileBeingEditedInModal by remember { mutableStateOf<RunnerProfileEntity?>(null) }
 
@@ -263,6 +276,60 @@ fun SettingsAndAssociationScreen(
             }
         }
 
+        // Sauvegarde des saisies (changement de téléphone, réinstallation)
+        item {
+            Card(
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "Sauvegarde de mes données",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                    Text(
+                        text = "Profils, dossards, dossards par course, terrain et notes, courses prévues, objectifs et traces GPX, " +
+                            "dans un fichier à garder (Drive, mail…). Les classements MyChrono n'y sont pas : ils se retéléchargent. " +
+                            "La restauration remplace les saisies qui portent sur les mêmes courses et garde les autres.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = { exportLauncher.launch("gaume-trail-alg-sauvegarde-${java.time.LocalDate.now()}.json") },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(42.dp)
+                                .testTag("settings_export_button")
+                        ) {
+                            Icon(imageVector = Icons.Default.Save, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Sauvegarder", fontWeight = FontWeight.Bold, maxLines = 1)
+                        }
+                        OutlinedButton(
+                            onClick = { importLauncher.launch(arrayOf("application/json", "text/*", "application/octet-stream")) },
+                            enabled = !isSyncingMyChrono,
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(42.dp)
+                                .testTag("settings_import_button")
+                        ) {
+                            Icon(imageVector = Icons.Default.Restore, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Restaurer", fontWeight = FontWeight.Bold, maxLines = 1)
+                        }
+                    }
+                }
+            }
+        }
+
         // 3. Recherche dans l'annuaire MyChrono
         item {
             Card(
@@ -329,6 +396,9 @@ fun SettingsAndAssociationScreen(
                         onValueChange = onUpdateSearchQuery,
                         label = { Text("Nom, club ou numéro de dossard") },
                         leadingIcon = { Icon(imageVector = Icons.Default.Search, contentDescription = null) },
+                        supportingText = {
+                            if (directorySearchQuery.trim().length < 2) Text("Tape au moins 2 caractères (100 résultats au plus).")
+                        },
                         singleLine = true,
                         modifier = Modifier
                             .fillMaxWidth()

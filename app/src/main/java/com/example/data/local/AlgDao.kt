@@ -74,6 +74,9 @@ interface AlgDao {
     @Query("SELECT * FROM activity_metrics")
     fun observeAllActivityMetrics(): Flow<List<ActivityMetricsEntity>>
 
+    @Query("SELECT * FROM activity_metrics")
+    suspend fun getAllActivityMetricsSnapshot(): List<ActivityMetricsEntity>
+
     @Query("SELECT * FROM activity_metrics WHERE raceId = :raceId AND profileId = :profileId LIMIT 1")
     suspend fun getActivityMetrics(raceId: String, profileId: String): ActivityMetricsEntity?
 
@@ -85,6 +88,9 @@ interface AlgDao {
 
     @Query("SELECT * FROM race_terrain_weather")
     fun observeAllTerrainWeather(): Flow<List<RaceTerrainWeatherEntity>>
+
+    @Query("SELECT * FROM race_terrain_weather")
+    suspend fun getAllTerrainWeatherSnapshot(): List<RaceTerrainWeatherEntity>
 
     @Query("SELECT * FROM race_terrain_weather WHERE raceId = :raceId AND profileId = :profileId LIMIT 1")
     suspend fun getTerrainWeather(raceId: String, profileId: String): RaceTerrainWeatherEntity?
@@ -194,6 +200,9 @@ interface AlgDao {
     // --- Objectifs de saison ---
     @Query("SELECT * FROM season_goals")
     fun observeSeasonGoals(): Flow<List<SeasonGoalEntity>>
+
+    @Query("SELECT * FROM season_goals")
+    suspend fun getSeasonGoalsSnapshot(): List<SeasonGoalEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertSeasonGoal(goal: SeasonGoalEntity)

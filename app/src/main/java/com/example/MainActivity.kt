@@ -508,7 +508,9 @@ fun GaumeTrailAlgAppContent(
                             onTriggerMyChronoSync = { year -> viewModel.syncMyChronoSeason(year) },
                             onPurgeAndResyncCleanResults = { viewModel.purgeAndResyncCleanResults() },
                             diagnostics = uiState.diagnostics,
-                            foundResultCounts = uiState.foundResultCounts
+                            foundResultCounts = uiState.foundResultCounts,
+                            onExportUserData = { viewModel.exportUserData(context, it) },
+                            onImportUserData = { viewModel.importUserData(context, it) }
                         )
                     }
                 }

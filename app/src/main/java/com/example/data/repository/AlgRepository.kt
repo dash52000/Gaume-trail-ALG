@@ -3,6 +3,7 @@ package com.example.data.repository
 import android.content.Context
 import android.net.Uri
 import android.content.SharedPreferences
+import com.example.BuildConfig
 import com.example.data.local.ActivityMetricsEntity
 import androidx.room.withTransaction
 import com.example.data.local.AlgDao
@@ -222,6 +223,50 @@ class AlgRepository(
         return race.dateIso >= now.minusDays(REFRESH_WINDOW_DAYS).toString()
     }
 
+    /** Ce que la contre-vérification par la fiche coureur a trouvé (messages, saisons à recalculer). */
+    private data class CrossCheckOutcome(
+        val messages: List<String> = emptyList(),
+        val touchedSeasons: Set<Int> = emptySet()
+    )
+
+    /** Toutes les saisons ont été recalculées depuis le lancement de l'appli. */
+    @Volatile
+    private var recomputedSinceLaunch = false
+
+    private fun sameRow(e: MyChronoRowEntity, r: MyChronoRawResultRow): Boolean =
+        e.runnerId == r.runnerId && e.bibNumber == r.bibNumber && e.fullName == r.fullName &&
+            e.distanceLabel == r.distanceLabel && e.timeSeconds == r.timeSeconds && e.overallRank == r.overallRank &&
+            e.points == r.points && e.categoryRank == r.categoryRank && e.categoryTotal == r.categoryTotal &&
+            e.totalFinishers == r.totalFinishers && e.category == r.category && e.club == r.club && e.sex == r.sex &&
+            e.distanceKm == r.distanceKm && e.distanceName == r.distanceName.ifBlank { r.distanceLabel }
+
+    /**
+     * Enregistre un classement téléchargé s'il diffère de celui gardé sur le téléphone (les lignes reprises
+     * d'une fiche coureur ne comptent pas dans la comparaison). Renvoie true s'il a changé.
+     */
+    private suspend fun storeRowsIfChanged(race: RaceEntity, rows: List<MyChronoRawResultRow>): Boolean {
+        val existing = algDao.getRowsForRace(race.raceId)
+            .filter { it.rowIndex < RUNNER_PAGE_ROW_INDEX }
+            .sortedBy { it.rowIndex }
+        val unchanged = existing.size == rows.size &&
+            existing.all { it.seasonYear == race.seasonYear && it.isChallenge == race.isChallenge } &&
+            existing.zip(rows).all { (e, r) -> sameRow(e, r) }
+        if (!unchanged) {
+            storeRows(race, rows)
+            return true
+        }
+        algDao.upsertFetchState(
+            RaceFetchStateEntity(
+                raceId = race.raceId,
+                seasonYear = race.seasonYear,
+                raceDateIso = race.dateIso,
+                fetchedAtEpochMillis = clock(),
+                rowCount = rows.size
+            )
+        )
+        return false
+    }
+
     private suspend fun storeRows(race: RaceEntity, rows: List<MyChronoRawResultRow>) = inTransaction {
         algDao.deleteRowsForRace(race.raceId)
         algDao.insertRows(rows.mapIndexed { idx, r ->
@@ -275,9 +320,15 @@ class AlgRepository(
                 calendars.values.first().exceptionOrNull() ?: IllegalStateException("MyChrono injoignable")
             )
         }
+        // Manches de chaque saison avant la mise à jour du calendrier (pour savoir quelles saisons recalculer).
+        fun raceSets(list: List<RaceEntity>) =
+            list.groupBy { it.seasonYear }.mapValues { (_, l) -> l.map { it.raceId to it.isChallenge }.toSet() }
+        val racesBefore = raceSets(algDao.getAllRacesSnapshot())
         calendars.forEach { (year, res) ->
             val races = res.getOrNull().orEmpty()
-            if (races.isNotEmpty()) {
+            // Calendrier identique à celui gardé : rien n'est réécrit (l'écran n'a rien à recalculer).
+            val unchanged = races.sortedBy { it.raceId } == algDao.getRacesBySeasonSnapshot(year).sortedBy { it.raceId }
+            if (races.isNotEmpty() && !unchanged) {
                 inTransaction {
                     algDao.deleteRacesBySeason(year)
                     algDao.upsertRaces(races)
@@ -286,6 +337,8 @@ class AlgRepository(
         }
 
         val allRaces = algDao.getAllRacesSnapshot()
+        val racesAfter = raceSets(allRaces)
+        val calendarChangedSeasons = (racesBefore.keys + racesAfter.keys).filter { racesBefore[it] != racesAfter[it] }.toSet()
         val states = algDao.getFetchStates().associateBy { it.raceId }
         // Après une mise à jour qui change la façon de lire les classements : chaque classement gardé est
         // retéléchargé une fois (une course en échec est réessayée seule, sans tout relancer).
@@ -306,15 +359,29 @@ class AlgRepository(
         val fetched = myChronoApiClient.fetchManyRaceResults(toFetch)
         val raceById = allRaces.associateBy { it.raceId }
         val refreshedForUpdate = fetched.keys.count { id -> raceById[id]?.let { outdated(it) } == true }
-        fetched.forEach { (raceId, rows) -> raceById[raceId]?.let { storeRows(it, rows) } }
+        // Un classement retéléchargé identique n'est pas réécrit (et ne fait rien recalculer).
+        val changedRaceIds = fetched.mapNotNull { (raceId, rows) ->
+            raceById[raceId]?.takeIf { storeRowsIfChanged(it, rows) }?.raceId
+        }.toSet()
 
-        val repairs = repairRunnerIds() + runCatching { crossCheckWithRunnerPages() }.getOrDefault(emptyList())
-        recomputeAllSeasons()
+        val idRepairs = repairRunnerIds()
+        val crossCheck = runCatching { crossCheckWithRunnerPages() }.getOrDefault(CrossCheckOutcome())
+        val repairs = idRepairs + crossCheck.messages
+        // Recalcul complet à la première synchro du lancement ou après un changement d'identifiant ;
+        // ensuite, seules les saisons dont un classement ou le calendrier a changé.
+        if (!recomputedSinceLaunch || idRepairs.isNotEmpty()) {
+            recomputeAllSeasons()
+            recomputedSinceLaunch = true
+        } else {
+            val touched = changedRaceIds.mapNotNull { raceById[it]?.seasonYear }.toSet() +
+                crossCheck.touchedSeasons + calendarChangedSeasons
+            algDao.getSeasonsWithRows().filter { it in touched }.sorted().forEach { recomputeSeason(it) }
+        }
         refreshDiagnostics(repairs)
         val weatherCount = runCatching { fetchMissingWeather(now) }.getOrDefault(0)
 
         val current = allRaces.filter { it.seasonYear == now.year }
-        val newResults = fetched.count { (raceId, rows) -> rows.isNotEmpty() && states[raceId]?.rowCount != rows.size }
+        val newResults = changedRaceIds.count { fetched[it].orEmpty().isNotEmpty() }
         Result.success(
             buildString {
                 append("MyChrono ${now.year} : ${current.count { it.isChallenge }} manches")
@@ -476,14 +543,14 @@ class AlgRepository(
      * téléchargement raté…), la course est retéléchargée ; s'il y manque encore, son résultat est repris de
      * la fiche et ajouté au classement de la course.
      */
-    private suspend fun crossCheckWithRunnerPages(): List<String> {
+    private suspend fun crossCheckWithRunnerPages(): CrossCheckOutcome {
         val profiles = algDao.getRunnerProfilesSnapshot().filter { it.myChronoRunnerId.isNotBlank() }
-        if (profiles.isEmpty()) return emptyList()
+        if (profiles.isEmpty()) return CrossCheckOutcome()
         val profileByRunner = profiles.associateBy { it.myChronoRunnerId.trim() }
         val pages = profileByRunner.keys.mapNotNull { id ->
             myChronoApiClient.fetchRunnerPage(id).getOrNull()?.let { id to it }
         }.toMap()
-        if (pages.isEmpty()) return emptyList()
+        if (pages.isEmpty()) return CrossCheckOutcome()
 
         val racesByEventId = algDao.getAllRacesSnapshot()
             .filter { it.seasonYear >= FIRST_SEASON }
@@ -512,11 +579,11 @@ class AlgRepository(
             rowsOf(e.race.raceId).any { it.distanceLabel == e.label && it.runnerId == e.runnerId }
 
         val missing = expected.filter { !isCached(it) }
-        if (missing.isEmpty()) return emptyList()
+        if (missing.isEmpty()) return CrossCheckOutcome()
 
         val toRefetch = missing.map { it.race }.distinctBy { it.raceId }
         myChronoApiClient.fetchManyRaceResults(toRefetch).forEach { (raceId, rows) ->
-            toRefetch.firstOrNull { it.raceId == raceId }?.let { storeRows(it, rows) }
+            toRefetch.firstOrNull { it.raceId == raceId }?.let { storeRowsIfChanged(it, rows) }
             rowsCache.remove(raceId)
         }
 
@@ -558,7 +625,7 @@ class AlgRepository(
             inTransaction { algDao.insertRows(patches) }
         }
 
-        return missing.groupBy { it.runnerId }.map { (id, list) ->
+        val messages = missing.groupBy { it.runnerId }.map { (id, list) ->
             val who = profileByRunner[id]?.displayName?.substringBefore(" ") ?: id
             val detail = list.groupingBy { it.label }.eachCount().entries
                 .sortedBy { if (it.key == MyChronoApiClient.LABEL_10KM) 0 else 1 }
@@ -567,6 +634,7 @@ class AlgRepository(
             "$who : $detail manquant(s) dans les classements, retrouvé(s) via la fiche MyChrono" +
                 if (fromPage > 0) " ($fromPage repris directement de la fiche)" else ""
         }
+        return CrossCheckOutcome(messages, missing.map { it.race.seasonYear }.toSet())
     }
 
     /** Met à jour le diagnostic affiché dans les réglages. */
@@ -668,7 +736,8 @@ class AlgRepository(
             syncAll()
         } else {
             val repairs = repairRunnerIds()
-            recomputeSeason(seasonYear)
+            // Identifiant corrigé : toutes les saisons en dépendent.
+            if (repairs.isNotEmpty()) recomputeAllSeasons() else recomputeSeason(seasonYear)
             refreshDiagnostics(repairs)
             Result.success((listOf("Saison $seasonYear recalculée") + repairs).joinToString(" • "))
         }
@@ -770,6 +839,57 @@ class AlgRepository(
                 terrainNotes = existing?.terrainNotes.orEmpty()
             )
         )
+    }
+
+    /** Saisies du coureur, telles qu'elles sont sur le téléphone. */
+    suspend fun userDataSnapshot(): UserDataSnapshot = withContext(Dispatchers.IO) {
+        UserDataSnapshot(
+            profiles = algDao.getRunnerProfilesSnapshot(),
+            seasonBibs = algDao.getSeasonBibsSnapshot(),
+            bibOverrides = algDao.getAllBibOverridesSnapshot(),
+            terrainNotes = algDao.getAllTerrainWeatherSnapshot(),
+            goals = algDao.getSeasonGoalsSnapshot(),
+            activities = algDao.getAllActivityMetricsSnapshot()
+        )
+    }
+
+    /** Écrit la sauvegarde des saisies dans le fichier choisi par le coureur. */
+    suspend fun exportUserDataTo(context: Context, uri: Uri): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            val data = userDataSnapshot()
+            val text = UserDataBackup.toJson(data, clock(), BuildConfig.VERSION_NAME)
+            context.contentResolver.openOutputStream(uri, "wt")?.use { it.write(text.toByteArray(Charsets.UTF_8)) }
+                ?: throw IllegalStateException("Impossible d'écrire le fichier de sauvegarde")
+            "Sauvegarde enregistrée : ${data.summary()}"
+        }
+    }
+
+    /** Lit une sauvegarde choisie par le coureur et la restaure. */
+    suspend fun importUserDataFrom(context: Context, uri: Uri): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            val text = context.contentResolver.openInputStream(uri)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
+                ?: throw IllegalStateException("Impossible de lire le fichier")
+            restoreUserData(UserDataBackup.fromJson(text))
+        }
+    }
+
+    /**
+     * Restaure des saisies : elles remplacent celles qui portent la même clé (profil, saison, course),
+     * le reste est gardé. Les résultats sont ensuite recalculés à partir des classements gardés.
+     */
+    suspend fun restoreUserData(data: UserDataSnapshot): String = withContext(Dispatchers.IO) {
+        inTransaction {
+            if (data.profiles.isNotEmpty()) algDao.upsertRunnerProfiles(data.profiles)
+            data.seasonBibs.forEach { algDao.upsertSeasonBib(it) }
+            data.bibOverrides.forEach { algDao.upsertBibOverride(it) }
+            data.terrainNotes.forEach { algDao.upsertTerrainWeather(it) }
+            data.goals.forEach { algDao.upsertSeasonGoal(it) }
+            if (data.activities.isNotEmpty()) algDao.upsertActivityMetrics(data.activities)
+        }
+        val repairs = repairRunnerIds()
+        recomputeAllSeasons()
+        refreshDiagnostics(repairs)
+        "Sauvegarde restaurée : ${data.summary()}"
     }
 
     /** Importe une trace GPX locale choisie par le coureur et l'associe à une course. */
