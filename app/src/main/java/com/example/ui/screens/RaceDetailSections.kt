@@ -1,0 +1,581 @@
+package com.example.ui.screens
+
+import android.net.Uri
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AddTask
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.EmojiEvents
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FileUpload
+import androidx.compose.material.icons.filled.Navigation
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.WbSunny
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import com.example.data.local.RaceBibOverrideEntity
+import com.example.data.local.RaceResultEntity
+import com.example.data.local.RunnerProfileEntity
+import com.example.domain.GpxAndTrackUtils
+import com.example.domain.RaceItemWithContext
+import com.example.domain.RunnerChallengeSummary
+import com.example.ui.components.GaumeGpsAndElevationCanvas
+import com.example.ui.components.GaumePerfsCalculator
+import com.example.ui.components.GaumeRacePronosticEntry
+import com.example.ui.components.RaceConditionsCard
+import com.example.ui.components.RacePracticalInfoCard
+import com.example.ui.components.RacePronosticVsActualMiniBanner
+import com.example.ui.components.openDirectionsTo
+import com.example.ui.components.Top15StatusBadge
+import com.example.ui.theme.ClayTerracotta
+import com.example.ui.theme.CountingTop15BadgeGreen
+import com.example.ui.theme.GoldPodium
+import com.example.ui.theme.SemoisRiverTeal
+
+@Composable
+internal fun OfficialMyChronoResultCard(
+    runnerName: String,
+    distanceKm: Int,
+    distanceName: String = "$distanceKm km",
+    isChallenge: Boolean = true,
+    result: RaceResultEntity?,
+    pronosticEntry: GaumeRacePronosticEntry? = null,
+    isCountingInTop15: Boolean,
+    rankAmongMyRaces: Int?,
+    onShareCardClick: () -> Unit = {},
+    onExpandBibSearch: () -> Unit = {}
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f))
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = if (result != null) {
+                            "Résultat officiel MyChrono • $distanceName"
+                        } else if (pronosticEntry != null) {
+                            "Pronostic avant-course • $distanceName"
+                        } else {
+                            "Résultat & dossard • $distanceName"
+                        },
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.ExtraBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = if (result != null) {
+                            "$runnerName • $distanceName • Dossard #${result.bibNumber}"
+                        } else if (pronosticEntry != null) {
+                            "$runnerName • Forme ${pronosticEntry.recentAveragePaceFormatted} (parcours moyen)"
+                        } else {
+                            "$runnerName • Aucun résultat sur le $distanceName"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                Spacer(modifier = Modifier.width(6.dp))
+                if (isChallenge) {
+                    Top15StatusBadge(
+                        isCountingInTop15 = isCountingInTop15,
+                        rankAmongRunnerRaces = rankAmongMyRaces,
+                        distanceLabel = "$distanceKm km"
+                    )
+                } else {
+                    Surface(shape = RoundedCornerShape(8.dp), color = MaterialTheme.colorScheme.tertiaryContainer) {
+                        Text(
+                            text = "Ne compte pas",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onTertiaryContainer,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+                }
+            }
+
+            if (pronosticEntry != null) {
+                RacePronosticVsActualMiniBanner(entry = pronosticEntry)
+            }
+
+            if (result == null) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onExpandBibSearch() }
+                ) {
+                    Text(
+                        text = if (isChallenge) {
+                            "Aucun résultat MyChrono trouvé sur le $distanceName pour cette manche. Utilisez l'encart « Dossard & Recherche MyChrono » ci-dessous pour chercher votre dossard."
+                        } else {
+                            "Aucun résultat MyChrono sur le $distanceName. Les résultats hors challenge apparaissent quand MyChrono les publie ; un dossard du jour peut être saisi ci-dessous."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(12.dp)
+                    )
+                }
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    DetailHighlightBox(
+                        label = "Temps Officiel",
+                        value = result.officialTimeFormatted,
+                        sub = result.distanceName ?: result.distanceLabel,
+                        accent = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.weight(1f)
+                    )
+                    DetailHighlightBox(
+                        label = "Allure & Vitesse",
+                        value = result.pacePerKmFormatted,
+                        sub = "${result.speedKmh} km/h",
+                        accent = SemoisRiverTeal,
+                        modifier = Modifier.weight(1f)
+                    )
+                    DetailHighlightBox(
+                        label = if (isChallenge) "Points (${result.distanceLabel})" else "Challenge",
+                        value = if (isChallenge) "${result.challengePoints} pts" else "—",
+                        sub = if (!isChallenge) "Hors challenge" else if (isCountingInTop15) "Retenu Top 15" else "Hors Top 15",
+                        accent = if (isChallenge && isCountingInTop15) CountingTop15BadgeGreen else ClayTerracotta,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Scratch",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = "${result.overallRank}e / ${result.totalFinishers}",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.ExtraBold
+                        )
+                    }
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Catégorie",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = "${result.categoryRank}e" + if (result.categoryTotal > 0) " / ${result.categoryTotal}" else "",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.ExtraBold
+                        )
+                    }
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable { onShareCardClick() }
+                            .testTag("detail_open_share_card_button")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Share,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Text(
+                                text = "Carte Bilan",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DetailHighlightBox(
+    label: String,
+    value: String,
+    sub: String,
+    accent: Color,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(12.dp),
+        color = accent.copy(alpha = 0.10f),
+        border = BorderStroke(1.dp, accent.copy(alpha = 0.30f))
+    ) {
+        Column(
+            modifier = Modifier.padding(8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = value,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.ExtraBold,
+                color = accent,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = sub,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+internal fun TrioRaceComparisonSection(
+    raceItem: RaceItemWithContext,
+    profiles: List<RunnerProfileEntity>,
+    trioSummaries: Map<String, RunnerChallengeSummary>
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                text = "Le Trio sur cette course",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1
+            )
+            profiles.forEach { profile ->
+                val results = raceItem.resultsByProfileAndDistance[profile.profileId].orEmpty()
+                if (results.isEmpty()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(9.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(profile.avatarColorHex))
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = profile.displayName.substringBefore(" "),
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1
+                            )
+                        }
+                        Text(
+                            text = "Non courue",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1
+                        )
+                    }
+                } else {
+                    results.forEach { r ->
+                        val distKm = if (r.distanceLabel == "5 km") 5 else 10
+                        val isCounting = trioSummaries[profile.profileId]
+                            ?.challengeForDistance(distKm)
+                            ?.countingRaceIds
+                            ?.contains(raceItem.race.raceId) == true
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(0.42f)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(9.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(profile.avatarColorHex))
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "${profile.displayName.substringBefore(" ")} (${r.distanceName ?: r.distanceLabel})",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            Row(
+                                modifier = Modifier.weight(0.58f),
+                                horizontalArrangement = Arrangement.End,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "#${r.bibNumber} • ${r.officialTimeFormatted}" +
+                                        if (raceItem.race.isChallenge) " • ${r.challengePoints} pts" else "",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                if (isCounting) {
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Icon(
+                                        imageVector = Icons.Default.EmojiEvents,
+                                        contentDescription = "Retenu Top 15",
+                                        tint = CountingTop15BadgeGreen,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+internal fun WatchAndGpsSection(
+    raceItem: RaceItemWithContext,
+    onPickGpxFile: () -> Unit
+) {
+    val metrics = raceItem.myMetrics
+    val trackPoints = remember(metrics?.serializedTrackPoints) {
+        metrics?.serializedTrackPoints?.let { GpxAndTrackUtils.deserializeTrackPoints(it) }.orEmpty()
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f))
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text(
+                text = "Trace GPS & Profil Altimétrique (.GPX)",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.ExtraBold,
+                maxLines = 1
+            )
+
+            if (metrics != null && trackPoints.isNotEmpty()) {
+                GaumeGpsAndElevationCanvas(
+                    trackPoints = trackPoints,
+                    recordedDistanceKm = metrics.recordedDistanceKm,
+                    elevationGainMeters = metrics.elevationGainMeters,
+                    sourceLabel = metrics.sourceTitle
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    WatchMetricChip(
+                        icon = Icons.Default.Favorite,
+                        label = "FC Moy / Max",
+                        value = "${metrics.avgHeartRateBpm ?: "--"} / ${metrics.maxHeartRateBpm ?: "--"} bpm",
+                        tint = ClayTerracotta,
+                        modifier = Modifier.weight(1f)
+                    )
+                    WatchMetricChip(
+                        icon = Icons.Default.Speed,
+                        label = "Cadence Moy.",
+                        value = metrics.cadenceSpm?.let { "$it spm" } ?: "Non mesurée",
+                        tint = SemoisRiverTeal,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            } else {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "Importez un fichier .GPX de votre montre pour afficher le tracé 2D et le profil altimétrique D+ de cette manche.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(12.dp)
+                    )
+                }
+            }
+
+            OutlinedButton(
+                onClick = onPickGpxFile,
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(42.dp)
+                    .testTag("import_gpx_race_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Default.FileUpload,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "Importer un fichier .GPX",
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun WatchMetricChip(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    value: String,
+    tint: Color,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(12.dp),
+        color = tint.copy(alpha = 0.10f)
+    ) {
+        Row(
+            modifier = Modifier.padding(10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = tint,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Column {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1
+                )
+                Text(
+                    text = value,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1
+                )
+            }
+        }
+    }
+}
