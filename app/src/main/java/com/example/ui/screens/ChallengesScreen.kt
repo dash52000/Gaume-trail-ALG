@@ -80,7 +80,6 @@ fun ChallengesContent(
     goalSeason: Int,
     goals: List<GoalProgress>,
     passport: VillagePassport?,
-    mapPoints: List<VillageMapPoint>,
     villageInfos: Map<String, VillageInfoEntity>,
     onSelectDistanceKm: (Int) -> Unit,
     onOpenRaceDetail: (String) -> Unit,
@@ -128,7 +127,7 @@ fun ChallengesContent(
             0 -> RecordsSection(seasonYear, selectedDistanceKm, records, onSelectDistanceKm, onOpenRaceDetail)
             1 -> BadgesSection(badges)
             2 -> TrioSection(seasonYear, trioChallenges)
-            3 -> VillagesSection(runnerName, passport, mapPoints, villageInfos, onOpenRaceDetail, onRequestVillageInfo)
+            3 -> VillagesSection(runnerName, passport, villageInfos, onOpenRaceDetail, onRequestVillageInfo)
             else -> GoalsSection(goalSeason, goals, onSetGoal)
         }
     }
@@ -339,65 +338,21 @@ private fun TrioSection(seasonYear: Int, challenges: List<TrioChallenge>) {
     }
 }
 
-// ---------- Villages : carte + fiches ----------
+// ---------- Villages : passeport (la carte est dans l'onglet Trio & Carte) ----------
 
 @Composable
 private fun VillagesSection(
     runnerName: String,
     passport: VillagePassport?,
-    points: List<VillageMapPoint>,
     villageInfos: Map<String, VillageInfoEntity>,
     onOpenRaceDetail: (String) -> Unit,
     onRequestVillageInfo: (String) -> Unit
 ) {
-    val seasons = points.flatMap { it.calendarSeasons }.distinct().sorted()
-    var seasonFilter by rememberSaveable { mutableStateOf<Int?>(null) }
-    var selectedKey by rememberSaveable { mutableStateOf<String?>(null) }
-
-    SectionCard {
-        Text("Carte des villages • $runnerName", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.ExtraBold)
-        Row(
-            modifier = Modifier.horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            (listOf<Int?>(null) + seasons).forEach { y ->
-                val sel = seasonFilter == y
-                Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = if (sel) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .clickable { seasonFilter = y }
-                ) {
-                    Text(
-                        y?.toString() ?: "Toutes saisons",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = if (sel) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                    )
-                }
-            }
-        }
-        val shown = points.filter { seasonFilter == null || seasonFilter in it.calendarSeasons }
-        fun visits(p: VillageMapPoint) = if (seasonFilter == null) p.visitsBySeason.values.sum() else p.visitsBySeason[seasonFilter] ?: 0
-        Text(
-            "${shown.count { visits(it) > 0 }} village(s) courus sur ${shown.size}" + (seasonFilter?.let { " au calendrier $it" } ?: ""),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        if (shown.isNotEmpty()) {
-            VillageMap(shown, ::visits, selectedKey) { selectedKey = it }
-        }
-        val selected = shown.firstOrNull { it.key == selectedKey }
-        if (selected != null) {
-            LaunchedEffect(selected.key) { onRequestVillageInfo(selected.village) }
-            VillageInfoBlock(selected.village, visits(selected), villageInfos[selected.key])
-        } else {
-            Text("Touche un village pour sa fiche.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
-
+    Text(
+        "La carte des villages est dans l'onglet Trio & Carte (« Mes villages »).",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
     if (passport != null) {
         VillagePassportCard(
             runnerName = runnerName,
@@ -409,78 +364,6 @@ private fun VillagesSection(
     }
 }
 
-@Composable
-private fun VillageMap(
-    points: List<VillageMapPoint>,
-    visits: (VillageMapPoint) -> Int,
-    selectedKey: String?,
-    onSelect: (String) -> Unit
-) {
-    val visitedColor = MaterialTheme.colorScheme.primary
-    val emptyColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
-    val selectColor = GoldPodium
-    val bg = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
-
-    val minLat = points.minOf { it.latitude }
-    val maxLat = points.maxOf { it.latitude }
-    val minLon = points.minOf { it.longitude }
-    val maxLon = points.maxOf { it.longitude }
-    val lonScale = cos(Math.toRadians((minLat + maxLat) / 2))
-    val spanX = ((maxLon - minLon) * lonScale).coerceAtLeast(0.01)
-    val spanY = (maxLat - minLat).coerceAtLeast(0.01)
-
-    fun project(p: VillageMapPoint, w: Float, h: Float, pad: Float): Offset {
-        val scale = minOf((w - 2 * pad) / spanX, (h - 2 * pad) / spanY).toFloat()
-        val offX = (w - spanX.toFloat() * scale) / 2
-        val offY = (h - spanY.toFloat() * scale) / 2
-        return Offset(
-            offX + ((p.longitude - minLon) * lonScale).toFloat() * scale,
-            offY + (maxLat - p.latitude).toFloat() * scale
-        )
-    }
-
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(240.dp)
-            .clip(RoundedCornerShape(12.dp))
-    ) {
-        Canvas(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(240.dp)
-                .testTag("village_map")
-                .pointerInput(points) {
-                    detectTapGestures { tap ->
-                        val pad = 14.dp.toPx()
-                        val nearest = points.minByOrNull {
-                            val o = project(it, this.size.width.toFloat(), this.size.height.toFloat(), pad)
-                            hypot(o.x - tap.x, o.y - tap.y)
-                        }
-                        if (nearest != null) {
-                            val o = project(nearest, this.size.width.toFloat(), this.size.height.toFloat(), pad)
-                            if (hypot(o.x - tap.x, o.y - tap.y) < 28.dp.toPx()) onSelect(nearest.key)
-                        }
-                    }
-                }
-        ) {
-            drawRect(bg)
-            val pad = 14.dp.toPx()
-            points.sortedBy { visits(it) }.forEach { p ->
-                val o = project(p, size.width, size.height, pad)
-                val n = visits(p)
-                if (n > 0) {
-                    drawCircle(visitedColor, radius = (4.dp.toPx() + minOf(n, 6) * 1.2.dp.toPx()), center = o)
-                } else {
-                    drawCircle(emptyColor, radius = 3.dp.toPx(), center = o, style = Stroke(width = 1.5.dp.toPx()))
-                }
-                if (p.key == selectedKey) {
-                    drawCircle(selectColor, radius = 12.dp.toPx(), center = o, style = Stroke(width = 2.5.dp.toPx()))
-                }
-            }
-        }
-    }
-}
 
 // ---------- Objectifs ----------
 

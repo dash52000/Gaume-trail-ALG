@@ -48,9 +48,11 @@ import androidx.compose.ui.unit.dp
 import com.example.data.local.RaceResultEntity
 import com.example.data.local.RunnerProfileEntity
 import com.example.domain.RaceItemWithContext
+import com.example.data.local.VillageInfoEntity
+import com.example.domain.VillageMapPoint
 import com.example.domain.RunnerChallengeSummary
-import com.example.ui.components.GaumeRacesMapCard
-import com.example.ui.components.TerrainAndWeatherMiniBadge
+import com.example.ui.components.RacesMapCard
+import com.example.ui.components.TerrainMiniBadge
 import com.example.ui.components.Top15SimulatorBannerCard
 import com.example.ui.theme.CountingTop15BadgeGreen
 import com.example.ui.theme.GoldPodium
@@ -73,17 +75,22 @@ fun SharedCalendarScreen(
     profiles: List<RunnerProfileEntity>,
     trioSummaries: Map<String, RunnerChallengeSummary>,
     horsChallengeItems: List<RaceItemWithContext> = emptyList(),
+    activeProfileId: String = "me",
+    villagePoints: List<VillageMapPoint> = emptyList(),
+    villageInfos: Map<String, VillageInfoEntity> = emptyMap(),
     onOpenRaceDetail: (String) -> Unit,
     onOpenTop15Simulator: () -> Unit = {},
     onTogglePlannedSimulatorRace: (raceId: String, isPlanned: Boolean, targetPoints: Int) -> Unit,
     onQuickUpdateTerrain: (raceId: String, terrainCondition: String) -> Unit,
+    onRequestVillageInfo: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     // 0 = Carte de Gaume & Simulateur Top 15, 1 = Comparaison Trio & Calendrier
     var selectedSubView by remember { mutableIntStateOf(0) }
     var displayFilter by remember { mutableStateOf(CalendarDisplayFilter.ALL) }
 
-    val primarySummary = trioSummaries["me"] ?: trioSummaries.values.firstOrNull()
+    // La carte et le simulateur suivent le profil choisi en haut de l'écran.
+    val primarySummary = trioSummaries[activeProfileId] ?: trioSummaries["me"] ?: trioSummaries.values.firstOrNull()
     val allRaces = primarySummary?.racesWithContext.orEmpty()
     val simulatorSummary = primarySummary?.simulatorForDistance(selectedDistanceKm)
 
@@ -179,14 +186,18 @@ fun SharedCalendarScreen(
             // SOUS-VUE 0 : CARTE INTERACTIVE DE LA GAUME & SIMULATEUR TOP 15
             if (allRaces.isNotEmpty()) {
                 item {
-                    GaumeRacesMapCard(
+                    RacesMapCard(
                         seasonYear = seasonYear,
                         selectedDistanceKm = selectedDistanceKm,
+                        runnerName = primarySummary?.profile?.displayName.orEmpty(),
                         racesWithContext = allRaces,
+                        villagePoints = villagePoints,
+                        villageInfos = villageInfos,
                         defaultTargetPoints = simulatorSummary?.defaultSuggestedTargetPoints ?: 0,
                         onOpenRaceDetail = onOpenRaceDetail,
                         onTogglePlannedForSimulator = onTogglePlannedSimulatorRace,
-                        onQuickUpdateTerrain = onQuickUpdateTerrain
+                        onQuickUpdateTerrain = onQuickUpdateTerrain,
+                        onRequestVillageInfo = onRequestVillageInfo
                     )
                 }
             }
@@ -515,13 +526,9 @@ private fun SharedCalendarRaceCard(
 
                 Spacer(modifier = Modifier.width(6.dp))
 
-                // Terrain et météo affichés seulement s'ils ont été saisis.
+                // Terrain affiché seulement s'il a été noté.
                 if (tw != null && tw.terrainCondition.isNotBlank()) {
-                    TerrainAndWeatherMiniBadge(
-                        terrainCondition = tw.terrainCondition,
-                        weatherCondition = tw.weatherCondition,
-                        temperatureC = tw.temperatureC
-                    )
+                    TerrainMiniBadge(terrainCondition = tw.terrainCondition)
                 }
             }
 

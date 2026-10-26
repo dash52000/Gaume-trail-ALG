@@ -310,8 +310,7 @@ class MyChronoApiClient(
         profile: RunnerProfileEntity,
         raceOverride: RaceBibOverrideEntity?,
         rawRows: List<MyChronoRawResultRow>,
-        isChallenge: Boolean = true,
-        @Suppress("UNUSED_PARAMETER") seasonBibsDeclared: Boolean = true
+        isChallenge: Boolean = true
     ): List<RaceResultEntity> {
         if (rawRows.isEmpty()) return emptyList()
         fun entity(row: MyChronoRawResultRow) = toRaceResultEntity(raceId, seasonYear, profile.profileId, row, isChallenge)

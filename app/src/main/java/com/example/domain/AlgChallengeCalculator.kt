@@ -55,9 +55,6 @@ data class RaceItemWithContext(
     fun rankForDistance(distanceKm: Int): Int? =
         if (distanceKm == 5) rankAmongRunnerRaces5km else rankAmongRunnerRaces10km
 
-    fun pointsDeltaForDistance(distanceKm: Int): Int? =
-        if (distanceKm == 5) pointsDeltaToEnterTop15For5km else pointsDeltaToEnterTop15For10km
-
     fun courseFactorForDistance(distanceKm: Int): Double? =
         if (distanceKm == 5) courseFactor5km else courseFactor10km
 
@@ -92,10 +89,7 @@ data class Top15SimulationSummary(
     val defaultSuggestedTargetPoints: Int,
     val candidateRaces: List<SimulatedRaceCandidate>,
     val plannedRaceIdsCountingInProjectedTop15: Set<String>
-) {
-    val projectedCountingRacesCount: Int get() = projectedCountingRaces
-    val projectedGainPoints: Int get() = netPointsGain
-}
+)
 
 /**
  * Résumé du Challenge Top 15 pour une distance spécifique (10 km OU 5 km).

@@ -14,8 +14,7 @@ data class RunnerProfileEntity(
     val preferredDistanceKm: Int = 10, // 5 or 10
     val categoryLabel: String,
     val clubName: String,
-    val avatarColorHex: Long,
-    val lastSyncedEpochMillis: Long? = null
+    val avatarColorHex: Long
 )
 
 @Entity(
@@ -145,9 +144,6 @@ data class RaceTerrainWeatherEntity(
     val profileId: String,
     /** Terrain noté par le coureur ("Sec", "Souple", "Boueux", "Très gras") ; "" si non renseigné. */
     val terrainCondition: String = "",
-    /** Ancienne saisie manuelle de la météo ; "" si non renseignée (la météo réelle vient d'Open-Meteo). */
-    val weatherCondition: String = "",
-    val temperatureC: Int? = null,
     val terrainNotes: String = "",
     val isPlannedForSimulator: Boolean = false,
     val plannedDistanceKm: Int = 10, // 10 or 5

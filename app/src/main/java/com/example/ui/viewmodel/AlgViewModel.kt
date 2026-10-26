@@ -543,10 +543,6 @@ class AlgViewModel(
         controlFlow.value = controlFlow.value.copy(preselectedShareRaceId = raceId)
     }
 
-    fun openPerfsShareCardForRace(raceId: String) {
-        openPerfsWithSubTab(subTab = 2, shareRaceId = raceId)
-    }
-
     fun selectRunnerProfile(profileId: String) {
         val profile = uiState.value.profiles.find { it.profileId == profileId }
         val preferredDist = profile?.preferredDistanceKm ?: controlFlow.value.selectedChallengeDistanceKm

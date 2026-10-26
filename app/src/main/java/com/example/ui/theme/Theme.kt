@@ -66,9 +66,3 @@ fun GaumeTrailAlgTheme(
     )
 }
 
-@Composable
-fun GaumeTrailTheme(
-    content: @Composable () -> Unit
-) {
-    GaumeTrailAlgTheme(content = content)
-}

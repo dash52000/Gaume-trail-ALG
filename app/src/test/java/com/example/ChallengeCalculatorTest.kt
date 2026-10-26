@@ -140,8 +140,6 @@ class ChallengeCalculatorTest {
                 raceId = "2026_r3",
                 profileId = "me",
                 terrainCondition = "Boueux",
-                weatherCondition = "Pluie",
-                temperatureC = 11,
                 terrainNotes = "Forêt de Pin humide",
                 isPlannedForSimulator = true,
                 plannedDistanceKm = 10,

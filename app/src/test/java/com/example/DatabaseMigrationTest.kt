@@ -115,7 +115,9 @@ class DatabaseMigrationTest {
         assertEquals(118, metrics.elevationGainMeters)
         assertNull(metrics.cadenceSpm)
 
-        assertEquals("Gras en forêt", dao.getTerrainWeather("alg_2026_r41", "me")?.terrainNotes)
+        val terrain = dao.getTerrainWeather("alg_2026_r41", "me")
+        assertEquals("Gras en forêt", terrain?.terrainNotes)
+        assertEquals("Boueux", terrain?.terrainCondition) // version 10 : seule la météo manuelle disparaît
         assertEquals(0, dao.searchDirectory("Laetitia").size)
 
         dao.upsertStandings(emptyList()) // la table de la version 7 existe

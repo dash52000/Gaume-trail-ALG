@@ -376,7 +376,6 @@ fun GaumeTrailAlgAppContent(
                             trioChallenges = uiState.trioChallenges,
                             goalSeason = uiState.goalSeason,
                             goals = uiState.goals,
-                            villageMapPoints = uiState.villageMapPoints,
                             villageInfos = uiState.villageInfos,
                             onSetGoal = { type, target -> viewModel.setSeasonGoal(type, target) },
                             onRequestVillageInfo = { viewModel.loadVillageInfo(it) },
@@ -437,6 +436,10 @@ fun GaumeTrailAlgAppContent(
                             profiles = uiState.profiles,
                             trioSummaries = uiState.trioSeasonSummaries,
                             horsChallengeItems = uiState.horsChallengeItems,
+                            activeProfileId = uiState.selectedProfileId,
+                            villagePoints = uiState.villageMapPoints,
+                            villageInfos = uiState.villageInfos,
+                            onRequestVillageInfo = { viewModel.loadVillageInfo(it) },
                             onOpenRaceDetail = { viewModel.openRaceDetail(it) },
                             onOpenTop15Simulator = { viewModel.setTop15SimulatorModalVisible(true) },
                             onTogglePlannedSimulatorRace = { raceId, isPlanned, targetPts ->

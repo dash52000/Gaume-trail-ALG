@@ -11,22 +11,22 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
 
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v5
 
       - name: Compiler l'APK et lancer les tests
         run: |
           set -o pipefail
           chmod +x gradlew
-          ./gradlew assembleDebug testDebugUnitTest --no-daemon --stacktrace 2>&1 | tee build.log
+          ./gradlew assembleOptimized testDebugUnitTest --no-daemon --stacktrace 2>&1 | tee build.log
 
       # Bilan des tests unitaires, visible dans les annotations du commit.
       - name: Bilan des tests
@@ -68,7 +68,7 @@ jobs:
 
       - name: Garder les rapports de tests
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: rapports-tests
           path: |
@@ -90,14 +90,14 @@ jobs:
 
       - name: Préparer l'APK
         if: github.ref == 'refs/heads/main'
-        run: cp app/build/outputs/apk/debug/app-debug.apk gaume-trail-alg.apk
+        run: cp app/build/outputs/apk/optimized/app-optimized.apk gaume-trail-alg.apk
 
       - name: Publier la Release
         if: github.ref == 'refs/heads/main'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
-          tag_name: v1.0.${{ github.run_number }}
-          name: Gaume Trail ALG 1.0.${{ github.run_number }}
+          tag_name: v1.2.${{ github.run_number }}
+          name: Gaume Trail ALG 1.2.${{ github.run_number }}
           body: |
             Télécharge `gaume-trail-alg.apk` depuis ton téléphone et ouvre-le pour l'installer.
             Commit : ${{ github.sha }}

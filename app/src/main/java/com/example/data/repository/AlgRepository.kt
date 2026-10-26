@@ -313,9 +313,6 @@ class AlgRepository(
         refreshDiagnostics(repairs)
         val weatherCount = runCatching { fetchMissingWeather(now) }.getOrDefault(0)
 
-        val stamp = clock()
-        algDao.getRunnerProfilesSnapshot().forEach { algDao.upsertRunnerProfile(it.copy(lastSyncedEpochMillis = stamp)) }
-
         val current = allRaces.filter { it.seasonYear == now.year }
         val newResults = fetched.count { (raceId, rows) -> rows.isNotEmpty() && states[raceId]?.rowCount != rows.size }
         Result.success(
@@ -354,9 +351,6 @@ class AlgRepository(
         return prefs.getLong(PREF_CACHE_FORMAT_SINCE, 0L)
     }
 
-    /** Ancien point d'entrée : synchronise tout. */
-    suspend fun syncSeasonFromMyChrono(@Suppress("UNUSED_PARAMETER") seasonYear: Int): Result<String> = syncAll()
-
     /** Retélécharge tous les classements publiés puis recalcule tout. */
     suspend fun resetAndResyncCleanResults(): Result<String> = syncAll(force = true)
 
@@ -387,7 +381,6 @@ class AlgRepository(
             val results = mutableListOf<RaceResultEntity>()
             for (profile in profiles) {
                 val sb = seasonBibs[profile.profileId]
-                val declared = sb != null && (sb.bib10km.isNotBlank() || sb.bib5km.isNotBlank())
                 val seasonProfile = profile.copy(
                     defaultBib10km = sb?.bib10km.orEmpty(),
                     defaultBib5km = sb?.bib5km.orEmpty()
@@ -400,8 +393,7 @@ class AlgRepository(
                         profile = seasonProfile,
                         raceOverride = overrides[profile.profileId]?.get(race.raceId),
                         rawRows = rows,
-                        isChallenge = race.isChallenge,
-                        seasonBibsDeclared = declared
+                        isChallenge = race.isChallenge
                     )
                 }
             }
@@ -750,8 +742,6 @@ class AlgRepository(
                 raceId = raceId,
                 profileId = profileId,
                 terrainCondition = terrainCondition.trim(),
-                weatherCondition = existing?.weatherCondition.orEmpty(),
-                temperatureC = existing?.temperatureC,
                 isPlannedForSimulator = isPlannedForSimulator,
                 plannedDistanceKm = if (plannedDistanceKm == 5) 5 else 10,
                 simulatedTargetPoints = simulatedTargetPoints?.coerceIn(0, 1200),
@@ -773,8 +763,6 @@ class AlgRepository(
             RaceTerrainWeatherEntity(
                 raceId = raceId,
                 profileId = profileId,
-                weatherCondition = existing?.weatherCondition.orEmpty(),
-                temperatureC = existing?.temperatureC,
                 terrainCondition = existing?.terrainCondition.orEmpty(),
                 isPlannedForSimulator = isPlanned,
                 plannedDistanceKm = if (distanceKm == 5) 5 else 10,

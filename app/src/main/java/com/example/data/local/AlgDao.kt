@@ -23,9 +23,6 @@ interface AlgDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertRunnerProfile(profile: RunnerProfileEntity)
 
-    @Query("SELECT * FROM races WHERE seasonYear = :seasonYear AND seasonYear >= 2025 ORDER BY roundNumber ASC")
-    fun observeRacesBySeason(seasonYear: Int): Flow<List<RaceEntity>>
-
     @Query("SELECT * FROM races WHERE seasonYear >= 2025 ORDER BY seasonYear DESC, roundNumber ASC")
     fun observeAllRaces(): Flow<List<RaceEntity>>
 
@@ -47,9 +44,6 @@ interface AlgDao {
     @Query("DELETE FROM races WHERE seasonYear = :seasonYear")
     suspend fun deleteRacesBySeason(seasonYear: Int)
 
-    @Query("SELECT * FROM race_results WHERE seasonYear = :seasonYear AND seasonYear >= 2025")
-    fun observeResultsBySeason(seasonYear: Int): Flow<List<RaceResultEntity>>
-
     @Query("SELECT * FROM race_results WHERE seasonYear >= 2025")
     fun observeAllResults(): Flow<List<RaceResultEntity>>
 
@@ -65,26 +59,8 @@ interface AlgDao {
     @Query("DELETE FROM race_results WHERE seasonYear = :seasonYear")
     suspend fun deleteResultsBySeason(seasonYear: Int)
 
-    @Query("DELETE FROM race_results WHERE profileId = :profileId")
-    suspend fun deleteResultsForProfile(profileId: String)
-
-    @Query("DELETE FROM race_results WHERE profileId = :profileId AND distanceLabel = :distanceLabel")
-    suspend fun deleteResultsForProfileAndDistance(profileId: String, distanceLabel: String)
-
-    @Query("DELETE FROM race_results WHERE raceId = :raceId AND profileId = :profileId")
-    suspend fun deleteResultForRaceAndProfile(raceId: String, profileId: String)
-
-    @Query("DELETE FROM race_results WHERE raceId = :raceId AND profileId = :profileId AND distanceLabel = :distanceLabel")
-    suspend fun deleteResultForRaceProfileAndDistance(raceId: String, profileId: String, distanceLabel: String)
-
-    @Query("DELETE FROM race_results")
-    suspend fun deleteAllRaceResults()
-
     @Query("SELECT * FROM race_bib_overrides")
     fun observeAllBibOverrides(): Flow<List<RaceBibOverrideEntity>>
-
-    @Query("SELECT * FROM race_bib_overrides WHERE profileId = :profileId")
-    suspend fun getBibOverridesForProfile(profileId: String): List<RaceBibOverrideEntity>
 
     @Query("SELECT * FROM race_bib_overrides WHERE raceId = :raceId AND profileId = :profileId LIMIT 1")
     suspend fun getBibOverride(raceId: String, profileId: String): RaceBibOverrideEntity?

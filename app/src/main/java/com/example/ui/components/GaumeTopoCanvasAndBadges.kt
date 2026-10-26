@@ -356,14 +356,10 @@ fun RunnerAndSeasonHeaderBar(
     }
 }
 
-/**
- * Badge compact indiquant l'état du terrain (Sec, Souple, Boueux, Très gras) et la météo.
- */
+/** Badge compact de l'état du terrain noté par le coureur (Sec, Souple, Boueux, Très gras). */
 @Composable
-fun TerrainAndWeatherMiniBadge(
+fun TerrainMiniBadge(
     terrainCondition: String,
-    weatherCondition: String,
-    temperatureC: Int? = null,
     modifier: Modifier = Modifier
 ) {
     val (terrainBg, terrainFg) = when (terrainCondition) {
@@ -372,48 +368,19 @@ fun TerrainAndWeatherMiniBadge(
         "Souple" -> MaterialTheme.colorScheme.tertiaryContainer to MaterialTheme.colorScheme.onTertiaryContainer
         else -> CountingTop15BadgeGreen.copy(alpha = 0.14f) to CountingTop15BadgeGreen
     }
-
-    Row(
-        modifier = modifier,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalAlignment = Alignment.CenterVertically
+    Surface(
+        shape = RoundedCornerShape(6.dp),
+        color = terrainBg,
+        modifier = modifier
     ) {
-        Surface(
-            shape = RoundedCornerShape(6.dp),
-            color = terrainBg
-        ) {
-            Text(
-                text = "Terrain $terrainCondition",
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.Bold,
-                color = terrainFg,
-                maxLines = 1,
-                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-            )
-        }
-        if (weatherCondition.isNotBlank() || temperatureC != null) Surface(
-            shape = RoundedCornerShape(6.dp),
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    imageVector = Icons.Default.WbSunny,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(11.dp)
-                )
-                Spacer(modifier = Modifier.width(3.dp))
-                Text(
-                    text = if (temperatureC != null) "$weatherCondition ${temperatureC}°C".trim() else weatherCondition,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1
-                )
-            }
-        }
+        Text(
+            text = "Terrain $terrainCondition",
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+            color = terrainFg,
+            maxLines = 1,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+        )
     }
 }
 

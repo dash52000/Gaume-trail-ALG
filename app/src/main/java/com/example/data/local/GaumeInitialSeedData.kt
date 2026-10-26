@@ -57,8 +57,7 @@ object GaumeInitialSeedData {
             preferredDistanceKm = 10,
             categoryLabel = "Seniors H",
             clubName = "Gaume Trail",
-            avatarColorHex = 0xFF1B5E3A,
-            lastSyncedEpochMillis = null
+            avatarColorHex = 0xFF1B5E3A
         ),
         RunnerProfileEntity(
             profileId = "laetitia",
@@ -69,8 +68,7 @@ object GaumeInitialSeedData {
             preferredDistanceKm = 5,
             categoryLabel = "Dames",
             clubName = "Gaume Trail",
-            avatarColorHex = 0xFFC85A32,
-            lastSyncedEpochMillis = null
+            avatarColorHex = 0xFFC85A32
         ),
         RunnerProfileEntity(
             profileId = "elodie",
@@ -81,8 +79,7 @@ object GaumeInitialSeedData {
             preferredDistanceKm = 5,
             categoryLabel = "Dames",
             clubName = "Gaume Trail",
-            avatarColorHex = 0xFF006D77,
-            lastSyncedEpochMillis = null
+            avatarColorHex = 0xFF006D77
         )
     )
 

@@ -16,10 +16,11 @@ android {
     applicationId = "com.aistudio.gaumetrail.vkrxpm"
     minSdk = 24
     targetSdk = 36
-    // Numéro du build GitHub : la version affichée dans l'appli est celle de la Release (v1.0.N).
+    // Version 1.2 : les deux premiers chiffres se changent ici, à la main ; le dernier est le numéro
+    // du build GitHub (celui de la Release, v1.2.N), qui sert aussi de versionCode et monte toujours.
     val ciRun = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
     versionCode = ciRun ?: 1
-    versionName = "1.0.${ciRun ?: 0}"
+    versionName = "1.2.${ciRun ?: 0}"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -54,6 +55,13 @@ android {
     debug {
       // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in
       // AI Studio.
+      signingConfig = signingConfigs.getByName("debugConfig")
+    }
+    // APK publié : comme la version de test, mais sans le mode débogage (l'appli tourne plus vite).
+    // Même clé de signature que les versions précédentes : la mise à jour s'installe par-dessus, sans perte.
+    create("optimized") {
+      initWith(getByName("debug"))
+      isDebuggable = false
       signingConfig = signingConfigs.getByName("debugConfig")
     }
   }
@@ -111,7 +119,6 @@ dependencies {
   implementation(libs.androidx.room.ktx)
   implementation(libs.androidx.room.runtime)
   // implementation(libs.coil.compose)
-  implementation(libs.converter.moshi)
   // implementation(libs.firebase.ai)
   // Uncomment to use Firestore:
   // implementation(libs.firebase.firestore)
@@ -126,11 +133,9 @@ dependencies {
   // implementation(libs.firebase.appcheck.debug)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
-  implementation(libs.logging.interceptor)
-  implementation(libs.moshi.kotlin)
   implementation(libs.okhttp)
+  implementation(libs.osmdroid.android)
   // implementation(libs.play.services.location)
-  implementation(libs.retrofit)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)
@@ -145,5 +150,4 @@ dependencies {
   debugImplementation(libs.androidx.compose.ui.test.manifest)
   debugImplementation(libs.androidx.compose.ui.tooling)
   "ksp"(libs.androidx.room.compiler)
-  "ksp"(libs.moshi.kotlin.codegen)
 }
