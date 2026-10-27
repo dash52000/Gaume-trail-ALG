@@ -110,7 +110,7 @@ class MyChronoApiClient(
 
         /**
          * Même personne d'après le nom : tous les mots du nom du profil se retrouvent dans le nom publié
-         * (« Damien Collet » = « COLLET Damien », « Élodie » = « MARTIN Elodie »).
+         * (« Damien Collet » = « COLLET Damien », « Elodie » = « MARTIN Elodie »).
          */
         fun namesMatch(profileName: String, publishedName: String): Boolean {
             val wanted = nameTokens(profileName)

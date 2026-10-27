@@ -66,7 +66,7 @@ private enum class CalendarDisplayFilter {
 /**
  * Onglet 3 : « Trio & Carte » (Sans Doublon, organisé en 2 sous-vues claires) :
  * - Sous-vue 0 : 🗺️ Carte de Gaume & Simulateur Top 15
- * - Sous-vue 1 : 👥 Comparaison Trio (Damien, Laetitia, Élodie) & Calendrier Partagé
+ * - Sous-vue 1 : 👥 Comparaison Trio (Damien, Laetitia, Elodie) & Calendrier Partagé
  */
 @Composable
 fun SharedCalendarScreen(
@@ -211,7 +211,7 @@ fun SharedCalendarScreen(
                 }
             }
         } else {
-            // SOUS-VUE 1 : COMPARAISON DU TRIO (DAMIEN, LAETITIA, ÉLODIE) & CALENDRIER PARTAGÉ
+            // SOUS-VUE 1 : COMPARAISON DU TRIO (DAMIEN, LAETITIA, ELODIE) & CALENDRIER PARTAGÉ
             item {
                 TrioComparisonHeaderCard(
                     seasonYear = seasonYear,

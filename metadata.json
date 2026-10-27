@@ -1,6 +1,6 @@
 {
   "name": "Gaume Trail ALG",
-  "description": "Suivi multi-coureurs (Moi, Laetitia, Élodie) du Challenge des Allures Libres de Gaume avec synchronisation MyChrono, Strava/GPX et ambiance forêt gaumaise Orval & Rulles.",
+  "description": "Suivi multi-coureurs (Moi, Laetitia, Elodie) du Challenge des Allures Libres de Gaume avec synchronisation MyChrono, Strava/GPX et ambiance forêt gaumaise Orval & Rulles.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

@@ -72,7 +72,7 @@ import com.example.ui.theme.SemoisRiverTeal
 /**
  * Écran Réglages & Attribution des Dossards par Challenge (10 km & 5 km) :
  * - Attribution directe et séparée du dossard Challenge 10 km et du dossard Challenge 5 km pour chaque membre du Trio
- * - Bouton 1-clic « Aucun (0 course) » pour vider un challenge non couru (ex. 10 km pour Laetitia et Élodie)
+ * - Bouton 1-clic « Aucun (0 course) » pour vider un challenge non couru (ex. 10 km pour Laetitia et Elodie)
  * - Bouton « Nettoyer les données sans dossard & Re-synchroniser MyChrono »
  * - Annuaire MyChrono (2026+)
  */
@@ -175,7 +175,7 @@ fun SettingsAndAssociationScreen(
                         }
                     }
 
-                    // Cartes d'attribution directe pour Damien, Laetitia et Élodie
+                    // Cartes d'attribution directe pour Damien, Laetitia et Elodie
                     profiles.forEach { profile ->
                         DirectDualChallengeBibAssignmentCard(
                             profile = profile,

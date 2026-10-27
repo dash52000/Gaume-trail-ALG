@@ -1,7 +1,7 @@
 // Service worker : l'appli s'ouvre même sans réseau (dernières données vues).
 // - Fichiers de l'appli : servis depuis le cache, mis à jour en arrière-plan.
 // - Données (data/) : réseau d'abord (résultats à jour), cache si hors ligne.
-const VERSION = "alg-web-v2";
+const VERSION = "alg-web-v3";
 const SHELL = [
   "./",
   "index.html",

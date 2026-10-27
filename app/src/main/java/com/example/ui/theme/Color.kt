@@ -13,7 +13,7 @@ val GaumePineBorder = Color(0xFF2B4739)
 val GaumeEmerald = Color(0xFF34D399)       // Profil "Moi" & Trace GPS
 val OrvalCopperAmber = Color(0xFFE07A2E)   // Profil "Laetitia" & Calice d'Orval
 val OrvalAmberSoft = Color(0xFF3B2110)
-val RullesHopGold = Color(0xFFF5B82E)      // Profil "Élodie" & Chope de Rulles / Top 15
+val RullesHopGold = Color(0xFFF5B82E)      // Profil "Elodie" & Chope de Rulles / Top 15
 val RullesGoldSoft = Color(0xFF3A2D0D)
 
 // Accents UI unifiés

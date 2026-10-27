@@ -45,7 +45,7 @@ object GaumeInitialSeedData {
 
     /**
      * Profils initiaux. Les identifiants MyChrono sont ceux relevés dans les résultats officiels
-     * (Damien Collet 1171, Laetitia 1202, Élodie 1189) ; les dossards sont annuels et propres à chaque distance.
+     * (Damien Collet 1171, Laetitia 1202, Elodie 1189) ; les dossards sont annuels et propres à chaque distance.
      */
     fun buildInitialProfiles(): List<RunnerProfileEntity> = listOf(
         RunnerProfileEntity(
@@ -72,7 +72,7 @@ object GaumeInitialSeedData {
         ),
         RunnerProfileEntity(
             profileId = "elodie",
-            displayName = "Élodie",
+            displayName = "Elodie",
             myChronoRunnerId = "1189",
             defaultBib10km = "",
             defaultBib5km = "1076",

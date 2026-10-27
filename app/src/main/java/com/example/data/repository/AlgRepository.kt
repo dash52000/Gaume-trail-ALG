@@ -182,6 +182,16 @@ class AlgRepository(
                 }
             }
         }
+        renameElodieWithoutAccent()
+    }
+
+    /** Le prénom s'écrit « Elodie », sans accent : corrige le profil déjà enregistré sous « Élodie ». */
+    private suspend fun renameElodieWithoutAccent() {
+        val withAccent = setOf("Élodie", java.text.Normalizer.normalize("Élodie", java.text.Normalizer.Form.NFD))
+        algDao.getRunnerProfilesSnapshot()
+            .filter { it.profileId == "elodie" && it.displayName in withAccent }
+            .takeIf { it.isNotEmpty() }
+            ?.let { list -> algDao.upsertRunnerProfiles(list.map { it.copy(displayName = "Elodie") }) }
     }
 
     private fun MyChronoRowEntity.toRaw() = MyChronoRawResultRow(
@@ -886,6 +896,8 @@ class AlgRepository(
             data.goals.forEach { algDao.upsertSeasonGoal(it) }
             if (data.activities.isNotEmpty()) algDao.upsertActivityMetrics(data.activities)
         }
+        // Une ancienne sauvegarde peut encore contenir « Élodie ».
+        renameElodieWithoutAccent()
         val repairs = repairRunnerIds()
         recomputeAllSeasons()
         refreshDiagnostics(repairs)

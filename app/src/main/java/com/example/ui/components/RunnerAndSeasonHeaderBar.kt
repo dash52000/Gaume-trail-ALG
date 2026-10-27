@@ -71,7 +71,7 @@ import kotlin.math.min
  * Barre supérieure optimisée pour Samsung Galaxy S25 :
  * - Bandeau supérieur de dégagement sous le poinçon de l'appareil photo frontal (statusBarsPadding + marge dédiée)
  * - Ligne de commandes agrandie (42 dp) : Sélecteur d'année dès 2026 (2026, 2027...) + Bascule Thème Sombre/Clair + Bouton Sync MyChrono
- * - Ligne coureurs : Sélecteur des 3 coureurs (Moi, Laetitia, Élodie) sur 1 ligne sans retour à la ligne.
+ * - Ligne coureurs : Sélecteur des 3 coureurs (Moi, Laetitia, Elodie) sur 1 ligne sans retour à la ligne.
  */
 @Composable
 fun RunnerAndSeasonHeaderBar(
@@ -280,7 +280,7 @@ fun RunnerAndSeasonHeaderBar(
                 }
             }
 
-            // Sélecteur Trio (Moi / Laetitia / Élodie) calibré pour S25 (360dp)
+            // Sélecteur Trio (Moi / Laetitia / Elodie) calibré pour S25 (360dp)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -304,7 +304,7 @@ fun RunnerAndSeasonHeaderBar(
                     val shortLabel = when (profile.profileId) {
                         "me" -> "Moi"
                         "laetitia" -> "Laetitia"
-                        "elodie" -> "Élodie"
+                        "elodie" -> "Elodie"
                         else -> profile.displayName.substringBefore(" ")
                     }
 
