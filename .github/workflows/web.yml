@@ -1,0 +1,125 @@
+name: Version web
+
+# Le robot de la version web :
+# 1. récupère les résultats MyChrono et refait les données du site (mêmes calculs que l'appli Android),
+# 2. publie le site (dossier web/) sur GitHub Pages.
+# Il tourne chaque matin, le samedi et le dimanche soir (courses du week-end), à chaque modification
+# du site ou de la sauvegarde des saisies, et à la demande (bouton « Run workflow »).
+on:
+  schedule:
+    - cron: '17 5 * * *'
+    - cron: '47 18 * * 0,6'
+  workflow_dispatch:
+  push:
+    branches: [main, web-v1]
+    paths:
+      - 'web/**'
+      - 'donnees/saisies.json'
+      - '.github/workflows/web.yml'
+      - 'app/src/test/java/com/example/WebDataExportTest.kt'
+      - 'app/src/main/java/com/example/ui/viewmodel/AlgUiStateBuilder.kt'
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+# Un seul passage du robot à la fois.
+concurrency:
+  group: version-web-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  donnees:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      # Une modification du seul site (web/) n'a pas besoin de nouvelles données.
+      - name: Faut-il refaire les données ?
+        id: besoin
+        run: |
+          if [ "${{ github.event_name }}" != "push" ]; then echo "oui=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          before="${{ github.event.before }}"
+          if ! git cat-file -e "${before}^{commit}" 2>/dev/null; then echo "oui=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          if git diff --name-only "$before" "${{ github.sha }}" | grep -qvE '^web/'; then
+            echo "oui=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "oui=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-java@v5
+        if: steps.besoin.outputs.oui == 'true'
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v5
+        if: steps.besoin.outputs.oui == 'true'
+
+      - name: Synchro MyChrono et calcul des écrans
+        if: steps.besoin.outputs.oui == 'true'
+        env:
+          ALG_WEB_EXPORT_DIR: ${{ github.workspace }}/web/data
+          ALG_WEB_INPUT_DIR: ${{ github.workspace }}/donnees
+        run: |
+          set -o pipefail
+          chmod +x gradlew
+          ./gradlew testDebugUnitTest --tests com.example.WebDataExportTest --no-daemon --stacktrace 2>&1 | tee build.log
+
+      - name: Bilan
+        if: always() && steps.besoin.outputs.oui == 'true'
+        run: |
+          python3 - <<'EOF'
+          import glob, xml.etree.ElementTree as ET
+          for f in glob.glob('app/build/test-results/testDebugUnitTest/*WebDataExport*.xml'):
+              root = ET.parse(f).getroot()
+              for out in root.iter('system-out'):
+                  for line in (out.text or '').splitlines():
+                      if line.startswith('::'):
+                          print(line)
+              for tc in root.iter('testcase'):
+                  for fl in tc.findall('failure') + tc.findall('error'):
+                      msg = (fl.get('message') or fl.text or '').replace('%', '%25').replace('\n', '%0A')[:1500]
+                      print(f"::error title=Export web::{msg}")
+                  if tc.find('skipped') is not None:
+                      print("::warning title=Export web::test ignoré (variable ALG_WEB_EXPORT_DIR absente ?)")
+          EOF
+          grep -E '^e: ' build.log | head -15 | sed 's/^/::error title=Kotlin::/' || true
+
+      - name: Enregistrer les nouvelles données
+        if: steps.besoin.outputs.oui == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A web/data donnees/cache
+          # Rien de neuf (seule la date du passage a changé) : pas de commit.
+          if git diff --cached --quiet -- . ':(exclude)web/data/meta.json'; then
+            echo "Aucun changement dans les résultats."
+            git reset -q
+            exit 0
+          fi
+          git commit -q -m "Données de la version web mises à jour par le robot"
+          git pull -q --rebase origin "${GITHUB_REF_NAME}"
+          git push -q origin "HEAD:${GITHUB_REF_NAME}"
+
+  publier:
+    needs: donnees
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      # Dernière version de main, avec les données que le robot vient d'écrire.
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: web
+      - id: deploy
+        uses: actions/deploy-pages@v4

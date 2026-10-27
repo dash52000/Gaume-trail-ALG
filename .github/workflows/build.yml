@@ -2,8 +2,13 @@ name: Build APK
 
 # Chaque push compile l'appli et lance les tests.
 # Seul un push sur main publie l'APK dans les Releases.
+# La version web (dossiers web/ et donnees/) a son propre workflow (web.yml) : la modifier ne refait pas l'APK.
 on:
   push:
+    paths-ignore:
+      - 'web/**'
+      - 'donnees/**'
+      - '.github/workflows/web.yml'
   workflow_dispatch:
 
 permissions:
