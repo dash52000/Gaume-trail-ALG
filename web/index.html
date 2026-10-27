@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Gaume Trail ALG</title>
+  <meta name="description" content="Suivi du Challenge des Allures Libres de Gaume pour Damien, Laetitia et Élodie.">
+  <meta name="theme-color" content="#1B5E3A" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0A100D" media="(prefers-color-scheme: dark)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="ALG Gaume">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="img/favicon-32.png" sizes="32x32">
+  <link rel="apple-touch-icon" href="img/apple-touch-icon.png">
+  <link rel="preload" href="fonts/plus-jakarta-sans-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="css/app.css">
+  <script>
+    // Thème choisi (clair / sombre) appliqué avant l'affichage, pour éviter un flash.
+    try { const t = localStorage.getItem("alg.theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+  </script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-row">
+      <div class="brand">Gaume Trail ALG<small id="data-date">Allures Libres de Gaume</small></div>
+      <select id="season" class="season-select" aria-label="Saison"></select>
+      <button id="theme" class="icon-btn" type="button" aria-label="Changer de thème"></button>
+    </div>
+    <div class="profiles" id="profiles" role="group" aria-label="Coureur affiché"></div>
+  </header>
+
+  <main id="view" aria-live="polite">
+    <div class="loading">Chargement…</div>
+  </main>
+
+  <nav class="bottom-nav" aria-label="Onglets">
+    <div class="inner" id="nav"></div>
+  </nav>
+
+  <div id="sheet-root"></div>
+  <div id="welcome-root"></div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
