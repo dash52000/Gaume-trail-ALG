@@ -1,6 +1,7 @@
 // Fiche d'une course (panneau qui monte du bas) : le Trio sur la course, record, conditions, infos pratiques.
 import { html, raw, icon, avatar, render } from "../ui.js";
-import { dateLongue, dec, ecart, indice, indicePhrase, meteo, prenom, points, cleVillage, allure } from "../fmt.js";
+import { dateLongue, dec, ecart, indice, indicePhrase, meteo, prenom, points, cleVillage, allure, couleur, de } from "../fmt.js";
+import { chargerLeaflet } from "./trio.js";
 import { donnees } from "../donnees.js";
 
 const root = () => document.getElementById("sheet-root");
@@ -61,7 +62,7 @@ function blocTop15(item, ctx) {
   return html`
     <div class="banner ${c ? "gold" : "info"}">
       ${icon(c ? "check" : "trophy")}
-      <div><strong>${c ? `Compte dans le Top 15 de ${prenom(ctx.profil.displayName)} (#${r}/15)` : `Hors Top 15 (#${r})`}</strong>
+      <div><strong>${c ? `Compte dans le Top 15 ${de(prenom(ctx.profil.displayName))} (#${r}/15)` : `Hors Top 15 (#${r})`}</strong>
         <span class="small muted">${res.challengePoints} pts sur le ${res.distanceLabel}${!c && manque ? ` • il manquait ${manque} pts pour entrer dans le Top 15` : ""}</span></div>
     </div>`;
 }
@@ -177,9 +178,14 @@ function blocVillage(item, villages) {
     </section>`;
 }
 
-/** Profil d'altitude de la trace GPX (« lat,lon,ele;… »), dessiné en SVG. */
-function profilAltitude(pointsTexte) {
-  const pts = pointsTexte.split(";").map((p) => p.split(",").map(Number)).filter((p) => p.length >= 3 && p.every((x) => !isNaN(x)));
+/** Points d'une trace (« lat,lon,ele;… ») → [[lat, lon, ele], …]. */
+function lirePoints(texte) {
+  return (texte || "").split(";").map((p) => p.split(",").slice(0, 3).map(Number))
+    .filter((p) => p.length === 3 && p.every((x) => !isNaN(x)) && Math.abs(p[0]) > 0.0001);
+}
+
+/** Profil d'altitude d'une trace, dessiné en SVG (couleur du coureur). */
+function profilAltitude(pts, couleurTrait, km) {
   if (pts.length < 2) return "";
   const R = 6371000;
   let d = 0;
@@ -191,19 +197,90 @@ function profilAltitude(pointsTexte) {
     d += 2 * R * Math.asin(Math.sqrt(a));
     serie.push({ d, e: pts[i][2] });
   }
-  const W = 320, H = 110, P = 22;
+  const W = 320, H = 110, P = 40;
   const emin = Math.min(...serie.map((s) => s.e)), emax = Math.max(...serie.map((s) => s.e));
   const x = (v) => P + (v / d) * (W - P - 4);
   const y = (v) => H - 16 - ((v - emin) / Math.max(1, emax - emin)) * (H - 30);
   const ligne = serie.map((s, i) => `${i ? "L" : "M"}${x(s.d).toFixed(1)},${y(s.e).toFixed(1)}`).join("");
   return html`
     <svg class="chart" viewBox="${`0 0 ${W} ${H}`}" role="img" aria-label="Profil d'altitude">
-      <path d="${ligne + `L${x(d).toFixed(1)},${H - 16}L${x(0)},${H - 16}Z`}" fill="var(--primary-container)" opacity=".7"/>
-      <path d="${ligne}" class="corr"/>
-      <text x="${P}" y="10">${Math.round(emax)} m</text>
-      <text x="${P}" y="${H - 18}">${Math.round(emin)} m</text>
-      <text x="${W - 4}" y="${H - 3}" text-anchor="end">${dec(d / 1000)} km</text>
+      <path d="${ligne + `L${x(d).toFixed(1)},${H - 16}L${x(0)},${H - 16}Z`}" fill="${couleurTrait}" opacity=".14"/>
+      <path d="${ligne}" fill="none" stroke="${couleurTrait}" stroke-width="2"/>
+      <line class="grid" x1="${P}" x2="${W - 4}" y1="${y(emax)}" y2="${y(emax)}"/>
+      <line class="grid" x1="${P}" x2="${W - 4}" y1="${y(emin)}" y2="${y(emin)}"/>
+      <text x="${P - 4}" y="${y(emax) + 3}" text-anchor="end">${Math.round(emax)} m</text>
+      <text x="${P - 4}" y="${y(emin) + 3}" text-anchor="end">${Math.round(emin)} m</text>
+      <text x="${P}" y="${H - 3}">0</text>
+      <text x="${W - 4}" y="${H - 3}" text-anchor="end">${dec(km ?? d / 1000)} km</text>
     </svg>`;
+}
+
+/** Traces GPX du Trio sur cette course : chaque coureur a les siennes dans ses propres fichiers. */
+async function tracesDuTrio(raceId, ctx) {
+  const lignes = await Promise.all(ctx.meta.profils.map(async (p) => {
+    const dist = p.preferredDistanceKm === 5 ? 5 : 10;
+    const [bilan, ecran] = p.profileId === ctx.profil.profileId
+      ? [ctx.bilan, ctx.ecran]
+      : await Promise.all([donnees.bilan(p.profileId, ctx.saison), donnees.etat(p.profileId, ctx.saison, dist)]);
+    const items = [...(bilan?.racesWithContext || []), ...(ecran?.horsChallengeItems || [])];
+    const m = items.find((i) => i.race.raceId === raceId)?.activityMetrics;
+    if (!m?.hasTrack) return null;
+    const t = await donnees.trace(raceId, p.profileId);
+    const pts = lirePoints(t?.points);
+    return pts.length >= 2 ? { p, m, pts } : null;
+  }));
+  return lignes.filter(Boolean);
+}
+
+let carteTrace = null;
+
+async function afficherTraces(raceId, ctx) {
+  const zone = document.getElementById("trace-zone");
+  if (!zone) return;
+  const traces = await tracesDuTrio(raceId, ctx);
+  if (!traces.length || !document.body.contains(zone)) return;
+  render(zone, html`
+    <section class="card">
+      <h3>${traces.length > 1 ? "Traces GPX du Trio" : `Trace GPX ${de(prenom(traces[0].p.displayName))}`}</h3>
+      <div id="carte-trace"></div>
+      ${traces.map(({ p, m, pts }) => html`
+        <div class="trace-line">
+          <span class="sw" style="${raw(`background:${couleur(p.avatarColorHex)}`)}"></span>
+          <span class="small"><b>${prenom(p.displayName)}</b> • ${dec(m.recordedDistanceKm)} km enregistrés${m.elevationGainMeters != null ? ` • +${m.elevationGainMeters} m D+` : ""}${m.avgHeartRateBpm ? ` • FC moy. ${m.avgHeartRateBpm}` : ""}</span>
+        </div>
+        ${profilAltitude(pts, couleur(p.avatarColorHex), m.recordedDistanceKm)}`)}
+    </section>`);
+
+  let L;
+  try {
+    L = await chargerLeaflet();
+  } catch (e) {
+    const c = document.getElementById("carte-trace");
+    if (c) c.outerHTML = '<p class="muted small">Carte indisponible hors ligne.</p>';
+    return;
+  }
+  const el = document.getElementById("carte-trace");
+  if (!el) return;
+  if (carteTrace) { carteTrace.remove(); carteTrace = null; }
+  // Dans le panneau qui défile : un doigt fait défiler la page, deux doigts déplacent la carte.
+  carteTrace = L.map(el, { dragging: !L.Browser.mobile, tap: false, scrollWheelZoom: false });
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 18,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+  }).addTo(carteTrace);
+  const limites = [];
+  traces.forEach(({ p, pts }) => {
+    const c = couleur(p.avatarColorHex);
+    const ligne = pts.map(([la, lo]) => [la, lo]);
+    L.polyline(ligne, { color: c, weight: 4, opacity: 0.85 }).addTo(carteTrace).bindPopup(escapeHtml(prenom(p.displayName)));
+    L.circleMarker(ligne[0], { radius: 6, color: "#fff", weight: 2, fillColor: c, fillOpacity: 1 }).addTo(carteTrace).bindPopup("Départ");
+    limites.push(...ligne);
+  });
+  carteTrace.fitBounds(limites, { padding: [16, 16] });
+}
+
+function escapeHtml(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
 export async function ouvrirFiche(raceId, ctx) {
@@ -235,15 +312,5 @@ export async function ouvrirFiche(raceId, ctx) {
     </div>`;
   render(root(), contenu);
   document.body.style.overflow = "hidden";
-
-  if (item.activityMetrics?.hasTrack) {
-    const t = await donnees.trace(raceId, item.activityMetrics.profileId);
-    const zone = document.getElementById("trace-zone");
-    if (t && zone) {
-      const m = item.activityMetrics;
-      render(zone, html`<section class="card"><h3>Trace GPX de ${prenom(ctx.profil.displayName)}</h3>
-        ${raw(String(profilAltitude(t.points)))}
-        <p class="small muted" style="margin:4px 0 0">${dec(m.recordedDistanceKm)} km enregistrés${m.elevationGainMeters != null ? ` • +${m.elevationGainMeters} m D+` : ""}${m.avgHeartRateBpm ? ` • FC moy. ${m.avgHeartRateBpm}` : ""}</p></section>`);
-    }
-  }
+  afficherTraces(raceId, ctx).catch((e) => console.error(e));
 }

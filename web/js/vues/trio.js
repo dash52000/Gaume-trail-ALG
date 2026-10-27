@@ -10,6 +10,18 @@ async function bilansDuTrio(ctx) {
   return Object.fromEntries(ctx.profils.map((p, i) => [p.profileId, liste[i]]));
 }
 
+/** Courses où au moins un membre du Trio a une trace GPX. */
+async function tracesDuTrio(ctx, bilans) {
+  const ecrans = await Promise.all(ctx.profils.map((p) =>
+    p.profileId === ctx.profil.profileId ? ctx.ecran : ctx.donnees.etat(p.profileId, ctx.saison, p.preferredDistanceKm === 5 ? 5 : 10)));
+  const ids = new Set();
+  ctx.profils.forEach((p, i) => {
+    [...(bilans[p.profileId]?.racesWithContext || []), ...(ecrans[i]?.horsChallengeItems || [])]
+      .forEach((it) => { if (it.activityMetrics?.hasTrack) ids.add(it.race.raceId); });
+  });
+  return ids;
+}
+
 function enTeteTrio(ctx, bilans) {
   return html`
     <section class="card">
@@ -33,7 +45,7 @@ function enTeteTrio(ctx, bilans) {
     </section>`;
 }
 
-function carteCourse(item, ctx, bilans) {
+function carteCourse(item, ctx, bilans, traces) {
   const race = item.race;
   const parProfil = item.resultsByProfileAndDistance || {};
   const quelquUn = Object.keys(parProfil).length > 0;
@@ -43,7 +55,7 @@ function carteCourse(item, ctx, bilans) {
         <span class="pill ${race.isChallenge ? (race.isSeasonFinale ? "gold" : "round") : "hc"}">${race.isChallenge ? `M#${race.roundNumber}` : "HC"}</span>
         <div class="titles">
           <div class="title">${race.title}</div>
-          <div class="sub">${race.village} • ${dateCourte(race.dateIso)} • ${race.isChallenge ? (race.isCompleted ? "terminée" : "à venir") : "hors challenge"}</div>
+          <div class="sub">${traces?.has(race.raceId) ? html`<span class="pill gpx">GPX</span> ` : ""}${race.village} • ${dateCourte(race.dateIso)} • ${race.isChallenge ? (race.isCompleted ? "terminée" : "à venir") : "hors challenge"}</div>
         </div>
       </div>
       ${quelquUn ? html`<div class="trio-results">${ctx.profils.map((p) => {
@@ -64,7 +76,7 @@ function carteCourse(item, ctx, bilans) {
     </article>`;
 }
 
-function calendrier(ctx, bilans) {
+function calendrier(ctx, bilans, traces) {
   const manches = ctx.bilan.racesWithContext || [];
   const hc = ctx.ecran.horsChallengeItems || [];
   const toutes = [...manches, ...hc].sort((a, b) => a.race.dateIso.localeCompare(b.race.dateIso) || a.race.roundNumber - b.race.roundNumber);
@@ -75,7 +87,7 @@ function calendrier(ctx, bilans) {
     ${enTeteTrio(ctx, bilans)}
     <div class="section-title"><h2>Calendrier ${ctx.saison} (${manches.length} manches${hc.length ? ` + ${hc.length} hors challenge` : ""})</h2></div>
     <div class="chips">${filtres.map(([v, l]) => html`<button class="chip" type="button" data-trio-filtre="${v}" aria-pressed="${filtreCalendrier === v}">${l}</button>`)}</div>
-    ${liste.length ? liste.map((i) => carteCourse(i, ctx, bilans)) : html`<div class="card muted" style="text-align:center">Aucune course dans ce filtre.</div>`}`;
+    ${liste.length ? liste.map((i) => carteCourse(i, ctx, bilans, traces)) : html`<div class="card muted" style="text-align:center">Aucune course dans ce filtre.</div>`}`;
 }
 
 function vueCarte(ctx) {
@@ -93,13 +105,14 @@ export async function vue(ctx) {
   if (!ctx.bilan || !ctx.ecran) return html`<div class="card">Pas encore de données pour cette saison.</div>`;
   const sous = ctx.sousOnglet ?? 1;
   const bilans = sous === 1 ? await bilansDuTrio(ctx) : null;
+  const traces = sous === 1 ? await tracesDuTrio(ctx, bilans) : null;
   return html`
     <div class="stack">
       <div class="segmented">
         <button class="chip" type="button" data-act="sous-onglet" data-v="0" aria-pressed="${sous === 0}">Carte</button>
         <button class="chip" type="button" data-act="sous-onglet" data-v="1" aria-pressed="${sous === 1}">Trio & Calendrier (${(ctx.bilan.racesWithContext || []).length})</button>
       </div>
-      ${sous === 0 ? vueCarte(ctx) : calendrier(ctx, bilans)}
+      ${sous === 0 ? vueCarte(ctx) : calendrier(ctx, bilans, traces)}
     </div>`;
 }
 
@@ -111,22 +124,25 @@ export function apres(ctx, el) {
   if ((ctx.sousOnglet ?? 1) === 0) dessinerCarte(ctx);
 }
 
-async function chargerLeaflet() {
-  if (window.L) return window.L;
-  if (!document.querySelector('link[href$="leaflet.css"]')) {
-    const css = document.createElement("link");
-    css.rel = "stylesheet";
-    css.href = "vendor/leaflet/leaflet.css";
-    document.head.appendChild(css);
+let leaflet = null;
+export function chargerLeaflet() {
+  if (window.L) return Promise.resolve(window.L);
+  if (!leaflet) {
+    if (!document.querySelector('link[href$="leaflet.css"]')) {
+      const css = document.createElement("link");
+      css.rel = "stylesheet";
+      css.href = "vendor/leaflet/leaflet.css";
+      document.head.appendChild(css);
+    }
+    leaflet = new Promise((ok, ko) => {
+      const sc = document.createElement("script");
+      sc.src = "vendor/leaflet/leaflet.js";
+      sc.onload = () => ok(window.L);
+      sc.onerror = (e) => { leaflet = null; ko(e); };
+      document.head.appendChild(sc);
+    });
   }
-  await new Promise((ok, ko) => {
-    const s = document.createElement("script");
-    s.src = "vendor/leaflet/leaflet.js";
-    s.onload = ok;
-    s.onerror = ko;
-    document.head.appendChild(s);
-  });
-  return window.L;
+  return leaflet;
 }
 
 async function dessinerCarte(ctx) {

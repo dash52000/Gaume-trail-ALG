@@ -120,3 +120,8 @@ export function cleVillage(texte) {
 export function rang(n) {
   return n == null ? "—" : n === 1 ? "1er" : `${n}e`;
 }
+
+/** « de Damien », « d'Élodie » (élision devant une voyelle). */
+export function de(nom) {
+  return /^[aeiouyàâäéèêëîïôöùûü]/i.test(nom || "") ? `d'${nom}` : `de ${nom}`;
+}

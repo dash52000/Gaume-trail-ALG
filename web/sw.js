@@ -1,7 +1,7 @@
 // Service worker : l'appli s'ouvre même sans réseau (dernières données vues).
 // - Fichiers de l'appli : servis depuis le cache, mis à jour en arrière-plan.
 // - Données (data/) : réseau d'abord (résultats à jour), cache si hors ligne.
-const VERSION = "alg-web-v1";
+const VERSION = "alg-web-v2";
 const SHELL = [
   "./",
   "index.html",
@@ -16,6 +16,7 @@ const SHELL = [
   "js/vues/perfs.js",
   "js/vues/trio.js",
   "js/vues/classement.js",
+  "js/vues/defis.js",
   "img/foret-gaume.jpg",
   "img/icone-192.png",
   "img/favicon-32.png",

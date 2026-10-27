@@ -133,7 +133,7 @@ export function carteManche(item, ctx, { record, prono } = {}) {
         <span class="pill ${res ? "done" : "round"}">M#${race.roundNumber}</span>
         <div class="titles">
           <div class="title">${race.title}</div>
-          <div class="sub">${race.title.startsWith(item.gaumeGeo.canonicalVillage) ? "" : `${item.gaumeGeo.canonicalVillage} • `}${item.gaumeGeo.territoryName} • ${dateCourte(race.dateIso)}</div>
+          <div class="sub">${item.activityMetrics?.hasTrack ? html`<span class="pill gpx">GPX</span> ` : ""}${race.title.startsWith(item.gaumeGeo.canonicalVillage) ? "" : `${item.gaumeGeo.canonicalVillage} • `}${item.gaumeGeo.territoryName} • ${dateCourte(race.dateIso)}</div>
         </div>
         ${statut}
       </div>
@@ -159,7 +159,7 @@ function carteHorsChallenge(item) {
         <span class="pill hc">HC</span>
         <div class="titles">
           <div class="title">${race.title}</div>
-          <div class="sub">${[item.gaumeGeo.canonicalVillage, dateCourte(race.dateIso), distances].filter(Boolean).join(" • ")}</div>
+          <div class="sub">${item.activityMetrics?.hasTrack ? html`<span class="pill gpx">GPX</span> ` : ""}${[item.gaumeGeo.canonicalVillage, dateCourte(race.dateIso), distances].filter(Boolean).join(" • ")}</div>
         </div>
         ${res ? html`<div style="text-align:right"><div class="mono" style="font-weight:800;color:var(--primary)">${res.officialTimeFormatted}</div>
             <div class="label muted">${res.distanceName || res.distanceLabel} • ${res.overallRank}e/${res.totalFinishers}</div></div>`

@@ -7,12 +7,14 @@ import * as courses from "./vues/courses.js";
 import * as perfs from "./vues/perfs.js";
 import * as trio from "./vues/trio.js";
 import * as classement from "./vues/classement.js";
+import * as defis from "./vues/defis.js";
 import { ouvrirFiche } from "./vues/fiche.js";
 
 const ONGLETS = [
   { id: "courses", titre: "Courses", icone: "courses", vue: courses },
   { id: "perfs", titre: "Perfs", icone: "perfs", vue: perfs },
   { id: "trio", titre: "Trio & Carte", icone: "trio", vue: trio },
+  { id: "defis", titre: "Défis", icone: "defis", vue: defis },
   { id: "classement", titre: "Classement", icone: "classement", vue: classement }
 ];
 
@@ -32,7 +34,7 @@ const etat = {
   distances: {},
   onglet: (location.hash || "").replace("#", "") || "courses",
   filtre: "ALL",
-  sousOnglets: { perfs: 0, trio: 1 },
+  sousOnglets: { perfs: 0, trio: 1, defis: 0 },
   classement: { recherche: "", filtre: "tous", nombre: 100 }
 };
 
